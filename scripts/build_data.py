@@ -11,7 +11,6 @@ import yaml
 import requests
 from datetime import datetime, timedelta, date
 from pathlib import Path
-from chinese_calendar import is_workday
 
 # 添加脚本目录到路径
 sys.path.insert(0, str(Path(__file__).parent))
