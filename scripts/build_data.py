@@ -45,7 +45,7 @@ DATA_DIR.mkdir(exist_ok=True)
 def get_mock_data(code, days=60):
     """
     模拟数据生成（用于Demo演示）
-    实际使用时替换为iFinD API调用
+    实际使用时替换为akshare调用
     """
     import pandas as pd
     import numpy as np
@@ -74,54 +74,54 @@ def get_mock_data(code, days=60):
     return data
 
 def get_akshare_data(code, days=60):
-"""
-从akshare获取A股历史数据（真实数据）
-"""
-try:
-import akshare as ak
-import pandas as pd
-from datetime import datetime, timedelta
+    """
+    从akshare获取A股历史数据（真实数据）
+    """
+    try:
+    import akshare as ak
+    import pandas as pd
+    from datetime import datetime, timedelta
 
-# 计算日期范围
-end_date = datetime.now()
-start_date = end_date - timedelta(days=days + 20)
+    # 计算日期范围
+    end_date = datetime.now()
+    start_date = end_date - timedelta(days=days + 20)
 
-# 获取历史行情 - 前复权数据
-df = ak.stock_zh_a_hist(
-symbol=code,
-period="daily",
-start_date=start_date.strftime('%Y%m%d'),
-end_date=end_date.strftime('%Y%m%d'),
-adjust="qfq"
-)
+    # 获取历史行情 - 前复权数据
+    df = ak.stock_zh_a_hist(
+    symbol=code,
+    period="daily",
+    start_date=start_date.strftime('%Y%m%d'),
+    end_date=end_date.strftime('%Y%m%d'),
+    adjust="qfq"
+    )
 
-if df is None or len(df) == 0:
-print(f"⚠️ akshare无数据，使用模拟数据: {code}")
-return get_mock_data(code, days)
+    if df is None or len(df) == 0:
+        print(f"⚠️ akshare无数据，使用模拟数据: {code}")
+        return get_mock_data(code, days)
 
-# 重命名列以兼容原有代码
-df = df.rename(columns={
-'日期': 'date',
-'开盘': 'open',
-'收盘': 'close',
-'最高': 'high',
-'最低': 'low',
-'成交量': 'volume'
-})
+    # 重命名列以兼容原有代码
+    df = df.rename(columns={
+    '日期': 'date',
+    '开盘': 'open',
+    '收盘': 'close',
+    '最高': 'high',
+    '最低': 'low',
+    '成交量': 'volume'
+    })
 
-# 转换日期
-df['date'] = pd.to_datetime(df['date'])
-df.set_index('date', inplace=True)
+    # 转换日期
+    df['date'] = pd.to_datetime(df['date'])
+    df.set_index('date', inplace=True)
 
-# 确保列名正确
-df = df[['open', 'high', 'low', 'close', 'volume']].astype(float)
+    # 确保列名正确
+    df = df[['open', 'high', 'low', 'close', 'volume']].astype(float)
 
-print(f"✅ akshare数据获取成功: {code} ({len(df)}条)")
-return df
+    print(f"✅ akshare数据获取成功: {code} ({len(df)}条)")
+    return df
 
-except Exception as e:
-print(f"⚠️ akshare获取失败({e})，使用模拟数据: {code}")
-return get_mock_data(code, days)
+    except Exception as e:
+    print(f"⚠️ akshare获取失败({e})，使用模拟数据: {code}")
+    return get_mock_data(code, days)
 
 
 # ==================== 主流程 ====================
