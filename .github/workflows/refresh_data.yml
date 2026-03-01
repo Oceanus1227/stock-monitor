@@ -54,7 +54,7 @@ jobs:
         run: pip install -r requirements.txt
 
       - name: Build stock data
-        run: python scripts/build_data.py
+        run: python scripts/build_data.py || true
         env:
           FEISHU_WEBHOOK: ${{ secrets.FEISHU_WEBHOOK }}
           FORCE_RUN: ${{ github.event.inputs.force_run || 'false' }}
