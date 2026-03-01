@@ -32,8 +32,39 @@ def load_config(path="configs/config.yaml"):
 
 
 def is_trading_day():
-    """判断是否交易日"""
-    return is_workday(date.today())
+    """
+    判断今天是否为交易日
+    不依赖 chinese_calendar，改用简单的周末判断 + 手动节假日列表
+    """
+    today = date.today()
+    
+    # 周六、周日直接跳过
+    if today.weekday() >= 5:
+        return False
+    
+    # 手动维护节假日（2025-2026年）
+    holidays = {
+        # 2025年
+        date(2025, 1, 1),   # 元旦
+        date(2025, 1, 28), date(2025, 1, 29), date(2025, 1, 30),
+        date(2025, 1, 31), date(2025, 2, 3), date(2025, 2, 4),  # 春节
+        date(2025, 4, 4),   # 清明
+        date(2025, 5, 1), date(2025, 5, 2),  # 劳动节
+        date(2025, 5, 31), date(2025, 6, 2),  # 端午
+        date(2025, 10, 1), date(2025, 10, 2), date(2025, 10, 3),
+        date(2025, 10, 6), date(2025, 10, 7), date(2025, 10, 8),  # 国庆
+        # 2026年
+        date(2026, 1, 1),   # 元旦
+        date(2026, 2, 17), date(2026, 2, 18), date(2026, 2, 19),
+        date(2026, 2, 20), date(2026, 2, 23), date(2026, 2, 24),  # 春节
+        date(2026, 4, 6),   # 清明
+        date(2026, 5, 1),   # 劳动节
+        date(2026, 6, 19),  # 端午
+        date(2026, 10, 1), date(2026, 10, 2), date(2026, 10, 5),
+        date(2026, 10, 6), date(2026, 10, 7), date(2026, 10, 8),  # 国庆
+    }
+    
+    return today not in holidays
 
 
 def now_cn():
