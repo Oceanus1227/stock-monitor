@@ -1,6 +1,8 @@
-# 股票监控配置文件
+# ============================================================
+# 股票监控系统配置文件
+# ============================================================
 
-# 监控股票列表
+# ── 监控股票列表 ─────────────────────────────────────────────
 watchlist:
   - code: "600519"
     name: "贵州茅台"
@@ -15,25 +17,70 @@ watchlist:
   - code: "600036"
     name: "招商银行"
 
-# 信号阈值配置
+
+# ── 信号阈值配置 ─────────────────────────────────────────────
 signals:
   rsi:
-    overbought: 70
-    oversold: 30
+    overbought: 70          # RSI 超买线
+    oversold: 30            # RSI 超卖线
+
   boll:
-    breakout_pct: 0.5
+    breakout_pct: 0.5       # 布林带突破确认幅度（预留，暂未启用）
+
   volume:
-    ma_period: 20
-    ratio: 1.5
+    ma_period: 20           # 成交量均线周期
+    ratio: 1.5              # 放量倍数（当日量 > 均量 × ratio 视为放量）
 
-# 运行时配置
+  # 【新增1】KDJ 阈值 —— technical_analysis.py 里 check_signals 会读取
+  kdj:
+    overbought: 80          # KDJ 高位死叉判断线
+    oversold: 20            # KDJ 低位金叉判断线
+
+  # 【新增2】最低信号数过滤 —— 至少触发 N 个信号才写入 alerts
+  min_signal_count: 1
+
+  # 【新增3】最低得分过滤 —— score 绝对值低于此值的结果不推送
+  min_score: 1
+
+
+# ── 运行时配置 ───────────────────────────────────────────────
 runtime:
-  interval_minutes: 15
-  use_trading_calendar: true
-  history_days: 60
+  interval_minutes: 15      # GitHub Actions cron 间隔（分钟），与 workflow 保持一致
+  use_trading_calendar: true # true = 非交易日跳过拉取，false = 强制每次都跑
+  history_days: 60           # 拉取历史数据天数（实际缓冲 +30，见 get_stock_data）
 
-# 推送配置
+  # 【新增4】前端迷你图天数 —— build_data.py 里 tail(n) 用这两个值
+  price_history_days: 20
+  volume_history_days: 20
+
+  # 【新增5】并发拉取开关（预留，当 watchlist 较长时开启）
+  concurrent: false
+  max_workers: 4
+
+
+# ── 推送配置 ─────────────────────────────────────────────────
 push:
-  channels: [feishu]
-  throttle_minutes: 30
-  strong_signal_only: true
+  channels:
+    - feishu                 # 目前支持 feishu，预留多渠道扩展
+
+  throttle_minutes: 30       # 同一只股票两次推送的最小间隔（分钟）
+  strong_signal_only: true   # true = 只推送"强"信号或趋势为"强势/偏强"的结果
+
+  # 【新增6】推送内容控制
+  include_kdj: true          # 推送消息里是否展示 KDJ 数值
+  include_boll: true         # 推送消息里是否展示布林带数值
+  include_score: true        # 推送消息里是否展示综合得分
+
+  # 【新增7】飞书 Webhook（本地调试用，生产环境用 GitHub Secrets）
+  # feishu_webhook: "https://open.feishu.cn/open-apis/bot/v2/hook/xxxxxx"
+  # ⚠️ 生产环境请删除上面这行，改用 FEISHU_WEBHOOK 环境变量
+
+
+# ── 数据输出配置 ─────────────────────────────────────────────
+# 【新增8】原版没有这一节，输出路径全部硬编码在 build_data.py 里
+output:
+  data_dir: "data"                        # signals.json / latest_run.json 输出目录
+  signals_file: "signals.json"
+  run_summary_file: "latest_run.json"
+  state_file: "state.json"               # 推送节流状态文件
+  pretty_json: true                       # true = json.dump indent=2，false = 压缩输出
