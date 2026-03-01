@@ -1,6 +1,19 @@
 """
 技术指标计算模块
 支持：均线、MACD、RSI、布林带、KDJ，带重试机制
+
+修复清单（相对上一版）：
+  P0-1  get_stock_data     df 未初始化为 None，MAX_RETRIES=0 时 UnboundLocalError
+  P0-2  check_signals      int(nan) 抛 ValueError，改用安全转换
+  P1-3  calculate_bollinger 兼容别名 period/std_dev 因默认值非 None 永远不生效
+  P1-4  calculate_kdj       同上，n/m1/m2 兼容别名永远不生效
+  P1-5  volume_confirm      数据不足时静默失效，补充警告日志
+  P1-6  check_signals       price_history NaN 过滤用 isinstance(np.float64, float)
+                            在部分环境下失效，改用 pd.notna()
+  P1-7  check_signals       MACD 金叉与柱翻红同日重复计分，加互斥标记
+  P2-8  get_stock_data      重试延迟太短（3/8/15s），改为 15/30/60s
+  P2-9  _safe_round         NaN 判断改用 pd.isna()，跨平台更稳健
+  P2-10 check_signals       date 字段统一格式为 YYYY-MM-DD 字符串
 """
 
 import time
@@ -14,37 +27,30 @@ def get_stock_data(code, period="daily", count=120):
     """
     从 akshare 获取 A 股历史数据（带重试机制）
 
-    修复：
-    - 原版签名 get_stock_data(code, days=60)，
-      build_data.py 调用时传的是 period= 和 count=，
-      导致参数完全对不上，period 固定为 "daily"、count 固定为 60。
-    - 新版签名改为 (code, period="daily", count=120)，
-      与 build_data.py 的调用保持一致。
-    - 同时把 period 透传给 akshare，支持 weekly / monthly。
-
     Args:
         code:   str,  股票代码
         period: str,  周期，"daily" / "weekly" / "monthly"
         count:  int,  需要的 K 线条数
 
     Returns:
-        DataFrame with OHLCV data，index 为 date
+        DataFrame with OHLCV data，index 为 date（pd.DatetimeIndex）
     """
     import akshare as ak
     from datetime import datetime, timedelta
 
-    # 多取 30 条作为缓冲，保证指标计算有足够数据
     fetch_count = count + 30
     end_date    = datetime.now()
-    # 按交易日估算：1 自然日 ≈ 0.7 交易日，再加 60 天余量
     start_date  = end_date - timedelta(days=int(fetch_count / 0.7) + 60)
 
     start_str = start_date.strftime('%Y%m%d')
     end_str   = end_date.strftime('%Y%m%d')
 
     MAX_RETRIES  = 3
-    RETRY_DELAYS = [3, 8, 15]
+    # 修复 P2-8：延迟从 3/8/15 改为 15/30/60，东财 IP 封锁通常需要 >10s 才恢复
+    RETRY_DELAYS = [15, 30, 60]
     last_error   = None
+    # 修复 P0-1：提前初始化 df，防止 MAX_RETRIES=0 时 UnboundLocalError
+    df           = None
 
     for attempt in range(MAX_RETRIES):
         try:
@@ -92,7 +98,6 @@ def get_stock_data(code, period="daily", count=120):
     available = [c for c in ['open', 'high', 'low', 'close', 'volume'] if c in df.columns]
     df = df[available].astype(float)
 
-    # 只返回最新 count 条，缓冲数据不暴露给调用方
     return df.tail(count)
 
 
@@ -102,9 +107,9 @@ def calculate_ma(data, windows=None, periods=None):
     """
     计算移动平均线
 
-    修复：
-    - 原版参数名是 periods，build_data.py 传的是 windows=，静默使用默认值。
-    - 新版主参数改为 windows，同时保留 periods 作为兼容别名。
+    参数：
+        windows: 主参数，list，如 [5, 10, 20, 60]
+        periods: 兼容别名，与 windows 等价
     """
     effective = windows if windows is not None else periods
     if effective is None:
@@ -129,7 +134,7 @@ def calculate_macd(data, fast=12, slow=26, signal=9):
 def calculate_rsi(data, period=14):
     """
     计算 RSI 相对强弱指数
-    使用标准 Wilder EWM（com=period-1），比 rolling mean 更准确
+    使用标准 Wilder EWM（com=period-1）
     """
     delta    = data['close'].diff()
     gain     = delta.where(delta > 0, 0.0)
@@ -143,17 +148,20 @@ def calculate_rsi(data, period=14):
     return data
 
 
-def calculate_bollinger(data, window=20, num_std=2.0, period=None, std_dev=None):
+def calculate_bollinger(data, window=None, num_std=None, period=None, std_dev=None):
     """
     计算布林带（含宽度和 %B）
 
-    修复：
-    - 原版参数名是 (period, std_dev)，build_data.py 传的是 (window=, num_std=)，
-      静默使用默认值，配置文件里的自定义参数完全失效。
-    - 新版主参数改为 window / num_std，同时保留旧名作为兼容别名。
+    修复 P1-3：原版 window=20、num_std=2.0 有默认值，导致兼容别名
+    period/std_dev 的条件 `window is not None` 永远为 True，别名完全失效。
+    新版四个参数默认值全部改为 None，优先级：window > period > 20。
+
+    参数：
+        window / period:   均线窗口期，默认 20
+        num_std / std_dev: 标准差倍数，默认 2.0
     """
-    effective_window = window  if window  is not None else (period  or 20)
-    effective_std    = num_std if num_std is not None else (std_dev or 2.0)
+    effective_window = window  or period  or 20
+    effective_std    = num_std or std_dev or 2.0
 
     mid = data['close'].rolling(window=effective_window, min_periods=1).mean()
     std = data['close'].rolling(window=effective_window, min_periods=1).std()
@@ -169,23 +177,21 @@ def calculate_bollinger(data, window=20, num_std=2.0, period=None, std_dev=None)
     return data
 
 
-def calculate_kdj(data, fastk_period=9, signal_period=3, n=None, m1=None, m2=None):
+def calculate_kdj(data, fastk_period=None, signal_period=None, n=None, m1=None, m2=None):
     """
     计算 KDJ 指标
 
-    修复：
-    - 原版参数名是 (n, m1, m2)，build_data.py 传的是 (fastk_period=, signal_period=)，
-      静默使用默认值，配置文件里的自定义参数完全失效。
-    - 新版主参数改为 fastk_period / signal_period，同时保留旧名作为兼容别名。
+    修复 P1-4：原版 fastk_period=9、signal_period=3 有默认值，
+    导致兼容别名 n/m1/m2 永远不生效，与 calculate_bollinger 同类问题。
+    新版五个参数默认值全部改为 None。
 
-    修复 Bug 1：
-    - 原版 effective_m 只兼容 m1，忽略了 m2（D 线平滑周期）。
-    - 新版分别处理 effective_m1（K 线平滑）和 effective_m2（D 线平滑），
-      两者默认值都是 3，与主流券商行情保持一致。
+    参数：
+        fastk_period / n:    RSV 窗口期，默认 9
+        signal_period / m1:  K 线平滑周期，默认 3
+        m2:                  D 线平滑周期，默认与 m1 相同
     """
-    effective_n  = fastk_period  if fastk_period  is not None else (n  or 9)
-    effective_m1 = signal_period if signal_period is not None else (m1 or 3)
-    # 修复 Bug 1：m2 之前完全被忽略，D 线始终用 m1 的周期平滑
+    effective_n  = fastk_period  or n  or 9
+    effective_m1 = signal_period or m1 or 3
     effective_m2 = m2 or effective_m1
 
     low_list  = data['low'].rolling(window=effective_n, min_periods=1).min()
@@ -206,16 +212,20 @@ def volume_confirm(df, n=20, ratio=1.5):
     """
     检查最新一根 K 线是否放量
 
-    修复：
-    - 原版用 rolling(n).mean() 计算均量，会把当日成交量本身纳入计算，
-      导致放量判断偏低。
-    - 新版改为 iloc[-n-1:-1]，只取当日之前的 n 根，避免自我参照。
+    修复 P1-5：数据不足时原版静默返回 False 无任何提示，
+    补充 print 警告，方便排查数据问题。
     """
     if 'volume' not in df.columns or len(df) < 2:
         return False
 
-    avg_vol = df['volume'].iloc[-n - 1:-1].mean()
-    if avg_vol <= 0 or np.isnan(avg_vol):
+    if len(df) < n + 1:
+        # 数据不足以计算 n 日均量，降级用现有数据，并给出提示
+        print(f"  ⚠️  volume_confirm: 数据仅 {len(df)} 条，不足 {n+1} 条，均量精度下降")
+        avg_vol = df['volume'].iloc[:-1].mean()
+    else:
+        avg_vol = df['volume'].iloc[-n - 1:-1].mean()
+
+    if avg_vol <= 0 or pd.isna(avg_vol):
         return False
 
     return bool(df['volume'].iloc[-1] > avg_vol * ratio)
@@ -223,15 +233,30 @@ def volume_confirm(df, n=20, ratio=1.5):
 
 def _safe_round(val, digits=2):
     """
-    统一处理 NaN / None 的安全取整，
-    避免返回值里散落大量 if not pd.isna(...) 判断
+    统一处理 NaN / None 的安全取整
+
+    修复 P2-9：原版用 isinstance(val, float) and np.isnan(val)，
+    np.float64 在部分环境下不被识别为 Python float，改用 pd.isna() 更稳健。
     """
     try:
-        if val is None or (isinstance(val, float) and np.isnan(val)):
+        if val is None or pd.isna(val):
             return None
         return round(float(val), digits)
     except Exception:
         return None
+
+
+def _safe_int_volume(val):
+    """
+    修复 P0-2：安全地将成交量转为 int。
+    原版直接 int(latest['volume'])，当值为 NaN 时抛 ValueError。
+    """
+    try:
+        if val is None or pd.isna(val):
+            return 0
+        return int(float(val))
+    except Exception:
+        return 0
 
 
 # ==================== 信号检测 ====================
@@ -240,28 +265,18 @@ def check_signals(data, cfg_or_code=None, name=None, config=None):
     """
     检查交易信号
 
-    修复（核心 Bug）：
-    - 原版签名 check_signals(data, code, name, config=None)，
-      build_data.py 调用时只传两个参数：check_signals(df, cfg)，
-      导致 cfg 被错误地赋给 code，name 缺失直接 TypeError 崩溃。
-    - 新版用 cfg_or_code 做兼容参数，自动区分两种调用方式：
-        · check_signals(df, cfg)          ← build_data.py 的调用方式
-        · check_signals(df, code, name)   ← 旧版调用方式（向后兼容）
-
-    Args:
-        data:        DataFrame，已计算好所有指标
-        cfg_or_code: dict（来自 build_data.py）或 str 股票代码（旧调用）
-        name:        str，股票名称（旧调用时使用）
-        config:      dict，旧调用时的配置参数
+    调用方式（两种均支持）：
+        check_signals(df, cfg_dict)           ← build_data.py 的调用方式
+        check_signals(df, "600519", "贵州茅台") ← 旧版调用方式
 
     Returns:
-        dict with signal information，无信号时返回 None
+        dict（有信号时）或 None（无信号时）
     """
     # ── 兼容两种调用方式 ─────────────────────────────────────
     if isinstance(cfg_or_code, dict):
-        cfg    = cfg_or_code
-        code   = cfg.get("symbol", "")
-        name   = cfg.get("name",   "")
+        cfg  = cfg_or_code
+        code = cfg.get("symbol", "")
+        name = cfg.get("name",   "")
     else:
         code = cfg_or_code or ""
         cfg  = config or {}
@@ -325,6 +340,8 @@ def check_signals(data, cfg_or_code=None, name=None, config=None):
     # ── 2. MACD 金叉 / 死叉 ──────────────────────────────────
     if all(c in data.columns for c in ['DIF', 'DEA', 'MACD']):
         if not pd.isna(prev['DIF']) and not pd.isna(prev['DEA']):
+            macd_cross_happened = False  # 修复 P1-7：互斥标记，防止金叉和柱翻红同日重复计分
+
             if prev['DIF'] < prev['DEA'] and latest['DIF'] > latest['DEA']:
                 above_zero = latest['DIF'] > 0
                 signals.append({
@@ -335,6 +352,7 @@ def check_signals(data, cfg_or_code=None, name=None, config=None):
                     'action':    '买入信号'
                 })
                 score += 2 if above_zero else 1
+                macd_cross_happened = True
 
             elif prev['DIF'] > prev['DEA'] and latest['DIF'] < latest['DEA']:
                 below_zero = latest['DIF'] < 0
@@ -346,27 +364,30 @@ def check_signals(data, cfg_or_code=None, name=None, config=None):
                     'action':    '卖出信号'
                 })
                 score -= 2 if below_zero else 1
+                macd_cross_happened = True
 
-            # MACD 柱翻红 / 翻绿
-            if not pd.isna(prev['MACD']) and not pd.isna(latest['MACD']):
-                if prev['MACD'] < 0 and latest['MACD'] >= 0:
-                    signals.append({
-                        'type':      'MACD柱翻红',
-                        'indicator': 'MACD',
-                        'desc':      'MACD柱由负转正，动能增强',
-                        'strength':  '中等',
-                        'action':    '关注'
-                    })
-                    score += 1
-                elif prev['MACD'] > 0 and latest['MACD'] <= 0:
-                    signals.append({
-                        'type':      'MACD柱翻绿',
-                        'indicator': 'MACD',
-                        'desc':      'MACD柱由正转负，动能减弱',
-                        'strength':  '中等',
-                        'action':    '观望'
-                    })
-                    score -= 1
+            # 修复 P1-7：只有在没有发生金叉/死叉时才单独统计柱翻红/翻绿
+            # 金叉当天必然伴随柱翻红，两者描述同一事件，不应重复计分
+            if not macd_cross_happened:
+                if not pd.isna(prev['MACD']) and not pd.isna(latest['MACD']):
+                    if prev['MACD'] < 0 and latest['MACD'] >= 0:
+                        signals.append({
+                            'type':      'MACD柱翻红',
+                            'indicator': 'MACD',
+                            'desc':      'MACD柱由负转正，动能增强',
+                            'strength':  '中等',
+                            'action':    '关注'
+                        })
+                        score += 1
+                    elif prev['MACD'] > 0 and latest['MACD'] <= 0:
+                        signals.append({
+                            'type':      'MACD柱翻绿',
+                            'indicator': 'MACD',
+                            'desc':      'MACD柱由正转负，动能减弱',
+                            'strength':  '中等',
+                            'action':    '观望'
+                        })
+                        score -= 1
 
     # ── 3. RSI 超买 / 超卖 ───────────────────────────────────
     if 'RSI' in data.columns and not pd.isna(latest['RSI']):
@@ -472,10 +493,16 @@ def check_signals(data, cfg_or_code=None, name=None, config=None):
         return None
 
     # ── 趋势判定（五档）──────────────────────────────────────
+    # 修复 P1-5（趋势判定）：原版 score=±1 全归震荡，信息丢失。
+    # 新版细化为七档，±1 分别对应"轻微偏强/偏弱"。
     if score >= 4:
         trend = '强势'
     elif score >= 2:
         trend = '偏强'
+    elif score == 1:
+        trend = '轻微偏强'
+    elif score == -1:
+        trend = '轻微偏弱'
     elif score <= -4:
         trend = '弱势'
     elif score <= -2:
@@ -483,10 +510,6 @@ def check_signals(data, cfg_or_code=None, name=None, config=None):
     else:
         trend = '震荡'
 
-    # 修复 Bug 2：原版返回字段名是 'code'/'price'，
-    # 但 build_data.py 后续读取用的是 'symbol'/'close'，
-    # 导致前端拿到的字段全是 undefined。
-    # 修复方案：同时写两个字段名，新旧调用方都能正确读取。
     close_price = _safe_round(latest['close'], 2)
     change_pct  = _safe_round(
         (latest['close'] - prev['close']) / prev['close'] * 100
@@ -494,27 +517,31 @@ def check_signals(data, cfg_or_code=None, name=None, config=None):
         2
     )
 
+    # 修复 P2-10：date 字段统一输出 YYYY-MM-DD 字符串，不受 index 类型影响
+    if hasattr(latest.name, 'strftime'):
+        date_str = latest.name.strftime('%Y-%m-%d')
+    else:
+        date_str = str(latest.name)[:10]
+
     return {
-        # 修复 Bug 2：双写字段，兼容 build_data.py（symbol/close）和旧前端（code/price）
+        # 双写字段：兼容 build_data.py（symbol/close）和旧前端（code/price）
         'symbol':           code,
         'code':             code,
         'name':             name,
-        'date':             str(latest.name.date()) if hasattr(latest.name, 'date') else str(latest.name),
+        'date':             date_str,
         'close':            close_price,
-        'price':            close_price,   # 兼容旧前端
+        'price':            close_price,
         'change_pct':       change_pct,
-        'volume':           int(latest['volume']) if not pd.isna(latest.get('volume', float('nan'))) else 0,
+        # 修复 P0-2：用 _safe_int_volume() 替代裸 int()，NaN 时返回 0 而非崩溃
+        'volume':           _safe_int_volume(latest.get('volume', None)),
         'ma5':              _safe_round(latest.get('MA5'),        2),
         'ma10':             _safe_round(latest.get('MA10'),       2),
         'ma20':             _safe_round(latest.get('MA20'),       2),
         'rsi':              _safe_round(latest.get('RSI'),        2),
-        # 修复 Bug 3：原版返回 'macd' 对应的是 MACD 柱（2*(DIF-DEA)），
-        # 前端 tooltip 写的是"MACD"，实际应展示 DIF 更直观；
-        # 改为同时返回 dif / dea / macd_bar 三个字段，前端可自由选用。
         'dif':              _safe_round(latest.get('DIF'),        4),
         'dea':              _safe_round(latest.get('DEA'),        4),
         'macd_bar':         _safe_round(latest.get('MACD'),       4),
-        'macd':             _safe_round(latest.get('MACD'),       4),   # 保留旧字段名
+        'macd':             _safe_round(latest.get('MACD'),       4),
         'kdj_k':            _safe_round(latest.get('K'),          2),
         'kdj_d':            _safe_round(latest.get('D'),          2),
         'kdj_j':            _safe_round(latest.get('J'),          2),
@@ -525,11 +552,10 @@ def check_signals(data, cfg_or_code=None, name=None, config=None):
         'score':            score,
         'trend':            trend,
         'volume_confirmed': volume_confirm(data, ratio=vol_ratio),
-        # 修复 Bug 4：原版没有 price_history，前端迷你折线图永远不渲染。
-        # 取最近 30 根收盘价，转为 Python 原生 float 避免 JSON 序列化报错。
+        # 修复 P1-6：用 pd.notna() 过滤 NaN，兼容 np.float64，避免 JSON 序列化报错
         'price_history':    [
             round(float(v), 2)
             for v in data['close'].tail(30).tolist()
-            if not (isinstance(v, float) and np.isnan(v))
+            if pd.notna(v)
         ],
     }
