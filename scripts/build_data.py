@@ -31,39 +31,29 @@ def load_config(path="configs/config.yaml"):
 
 def is_trading_day(check_date=None):
     """优先用 akshare 交易日历接口，失败时降级到本地节假日规则。"""
-    target = check_date or date.today()
-
+    # 👇 修复：统一使用北京时间
+    target = check_date or now_cn().date()
     if target.weekday() >= 5:
         return False
-
     try:
         import akshare as ak
         import pandas as pd
-        trade_cal   = ak.tool_trade_date_hist_sina()
+        trade_cal = ak.tool_trade_date_hist_sina()
         trade_dates = pd.to_datetime(trade_cal["trade_date"]).dt.date.tolist()
         return target in trade_dates
     except Exception:
         pass
-
+        
     holidays = {
         # 2025
-        date(2025, 1, 1),
-        date(2025, 1, 28), date(2025, 1, 29), date(2025, 1, 30),
-        date(2025, 1, 31), date(2025, 2, 3),  date(2025, 2, 4),
-        date(2025, 4, 4),
-        date(2025, 5, 1),  date(2025, 5, 2),
-        date(2025, 5, 31), date(2025, 6, 2),
-        date(2025, 10, 1), date(2025, 10, 2), date(2025, 10, 3),
+        date(2025, 1, 1), date(2025, 1, 28), date(2025, 1, 29), date(2025, 1, 30), date(2025, 1, 31),
+        date(2025, 2, 3), date(2025, 2, 4), date(2025, 4, 4), date(2025, 5, 1), date(2025, 5, 2),
+        date(2025, 5, 31), date(2025, 6, 2), date(2025, 10, 1), date(2025, 10, 2), date(2025, 10, 3),
         date(2025, 10, 6), date(2025, 10, 7), date(2025, 10, 8),
         # 2026
-        date(2026, 1, 1),
-        date(2026, 2, 17), date(2026, 2, 18), date(2026, 2, 19),
-        date(2026, 2, 20), date(2026, 2, 23), date(2026, 2, 24),
-        date(2026, 4, 6),
-        date(2026, 5, 1),
-        date(2026, 6, 19),
-        date(2026, 10, 1), date(2026, 10, 2), date(2026, 10, 5),
-        date(2026, 10, 6), date(2026, 10, 7), date(2026, 10, 8),
+        date(2026, 1, 1), date(2026, 2, 17), date(2026, 2, 18), date(2026, 2, 19), date(2026, 2, 20),
+        date(2026, 2, 23), date(2026, 2, 24), date(2026, 4, 6), date(2026, 5, 1), date(2026, 6, 19),
+        date(2026, 10, 1), date(2026, 10, 2), date(2026, 10, 5), date(2026, 10, 6), date(2026, 10, 7), date(2026, 10, 8),
     }
     return target not in holidays
 
@@ -71,10 +61,11 @@ def is_trading_day(check_date=None):
 def get_last_real_trading_date():
     """自动往前找最近一个真实交易日（最多回溯 7 天）。"""
     for i in range(1, 8):
-        candidate = date.today() - timedelta(days=i)
+        # 👇 修复：统一使用北京时间
+        candidate = now_cn().date() - timedelta(days=i)
         if is_trading_day(candidate):
             return candidate
-    return date.today() - timedelta(days=1)
+    return now_cn().date() - timedelta(days=1)
 
 
 def now_cn():
