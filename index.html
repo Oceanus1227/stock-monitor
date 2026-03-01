@@ -32,7 +32,6 @@
         .header-left h1 { font-size: 28px; color: #333; margin-bottom: 6px; }
         .header-left .subtitle { color: #666; font-size: 14px; }
         .header-left .update-time { color: #999; font-size: 12px; margin-top: 6px; }
-        /* 【新增】右上角实时时钟 */
         .header-right { text-align: right; }
         .live-clock { font-size: 22px; font-weight: bold; color: #667eea; }
         .live-date  { font-size: 12px; color: #999; margin-top: 4px; }
@@ -68,7 +67,6 @@
             border-radius: 12px;
             box-shadow: 0 4px 15px rgba(0,0,0,0.1);
             text-align: center;
-            /* 【新增】鼠标悬停微动效 */
             transition: transform 0.15s ease, box-shadow 0.15s ease;
         }
         .stat-card:hover {
@@ -97,7 +95,6 @@
             align-items: center;
             justify-content: space-between;
         }
-        /* 【新增】信号排序切换按钮 */
         .sort-toggle {
             font-size: 13px;
             font-weight: normal;
@@ -157,8 +154,9 @@
         .change { font-size: 14px; font-weight: bold; }
         .change.up   { color: #e74c3c; }
         .change.down { color: #27ae60; }
+        .change.flat { color: #999; }
 
-        /* ── 趋势徽章 ─────────────────────────────────────────── */
+        /* ── 趋势徽章：修复 Bug 5，补全五档映射 ─────────────── */
         .trend-badge {
             display: inline-block;
             padding: 4px 12px;
@@ -166,9 +164,16 @@
             font-size: 12px;
             font-weight: bold;
         }
-        .trend-badge.bull    { background: #ffebee; color: #c62828; }
-        .trend-badge.bear    { background: #e8f5e9; color: #2e7d32; }
-        .trend-badge.neutral { background: #fff3e0; color: #ef6c00; }
+        /* 强势：深红底 */
+        .trend-badge.bull-strong { background: #ffcdd2; color: #b71c1c; }
+        /* 偏强：浅红底 */
+        .trend-badge.bull-weak   { background: #ffebee; color: #c62828; }
+        /* 震荡：橙色 */
+        .trend-badge.neutral     { background: #fff3e0; color: #ef6c00; }
+        /* 偏弱：浅绿底 */
+        .trend-badge.bear-weak   { background: #e8f5e9; color: #2e7d32; }
+        /* 弱势：深绿底 */
+        .trend-badge.bear-strong { background: #c8e6c9; color: #1b5e20; }
 
         /* ── 指标行 ───────────────────────────────────────────── */
         .indicators {
@@ -185,15 +190,9 @@
         }
         .indicator span { color: #444; font-weight: 500; }
 
-        /* 【新增】迷你价格走势图 */
-        .mini-chart-wrap {
-            margin: 12px 0 4px;
-        }
-        .mini-chart-label {
-            font-size: 11px;
-            color: #aaa;
-            margin-bottom: 4px;
-        }
+        /* ── 迷你价格走势图 ───────────────────────────────────── */
+        .mini-chart-wrap  { margin: 12px 0 4px; }
+        .mini-chart-label { font-size: 11px; color: #aaa; margin-bottom: 4px; }
         .mini-chart {
             display: block;
             width: 100%;
@@ -227,6 +226,7 @@
         }
         .signal-strength.strong { background: #e74c3c; color: white; }
         .signal-strength.medium { background: #f39c12; color: white; }
+        .signal-strength.weak   { background: #aaa;    color: white; }
 
         /* ── 运行状态表格 ─────────────────────────────────────── */
         table { width: 100%; border-collapse: collapse; margin-top: 15px; }
@@ -256,8 +256,8 @@
             font-size: 14px;
             transition: background 0.15s;
         }
-        .refresh-btn:hover { background: #5a6fd6; }
-        /* 【新增】上一次刷新时间提示 */
+        .refresh-btn:hover   { background: #5a6fd6; }
+        .refresh-btn:disabled { background: #aaa; cursor: not-allowed; }
         .last-refresh { font-size: 12px; color: #aaa; align-self: center; }
 
         /* ── 响应式 ───────────────────────────────────────────── */
@@ -280,7 +280,6 @@
             <div class="subtitle">基于 akshare 开源数据 | MA · MACD · RSI · 布林带 · KDJ</div>
             <div class="update-time" id="update-time">加载中...</div>
         </div>
-        <!-- 【新增】实时时钟 -->
         <div class="header-right">
             <div class="live-clock" id="live-clock">--:--:--</div>
             <div class="live-date"  id="live-date">----/--/--</div>
@@ -299,6 +298,7 @@
     <!-- ── Stats ─────────────────────────────────────────── -->
     <div class="stats">
         <div class="stat-card">
+            <!-- 修复 Bug 9/10：原版读 signals.length，现在读 watchlist_count -->
             <div class="number" id="stat-total">-</div>
             <div class="label">监控股票</div>
         </div>
@@ -306,7 +306,6 @@
             <div class="number" id="stat-alerts">-</div>
             <div class="label">今日信号</div>
         </div>
-        <!-- 【优化】强势改为统计"偏强+强势"两档 -->
         <div class="stat-card">
             <div class="number" id="stat-strong">-</div>
             <div class="label">强势 / 偏强</div>
@@ -315,7 +314,6 @@
             <div class="number" id="stat-ok">-</div>
             <div class="label">成功更新</div>
         </div>
-        <!-- 【新增】弱势计数 -->
         <div class="stat-card">
             <div class="number" id="stat-weak">-</div>
             <div class="label">弱势 / 偏弱</div>
@@ -326,7 +324,6 @@
     <div class="section">
         <div class="section-title">
             🔔 最新信号
-            <!-- 【新增】排序切换 -->
             <span class="sort-toggle" id="sort-toggle" onclick="toggleSort()">按得分排序 ↓</span>
         </div>
         <div id="signals-container">
@@ -341,7 +338,7 @@
             <div class="loading">加载中...</div>
         </div>
         <div class="toolbar">
-            <button class="refresh-btn" onclick="loadData()">🔄 刷新数据</button>
+            <button class="refresh-btn" id="refresh-btn" onclick="loadData()">🔄 刷新数据</button>
             <span class="last-refresh" id="last-refresh"></span>
         </div>
     </div>
@@ -350,7 +347,7 @@
 
 <script>
 // ============================================================
-// 状态
+// 全局状态
 // ============================================================
 let _signalsCache = [];
 let _sortByScore  = true;   // true=得分降序  false=涨跌幅降序
@@ -362,9 +359,11 @@ function startClock() {
     function tick() {
         const now  = new Date();
         const hms  = now.toLocaleTimeString('zh-CN', { hour12: false });
-        const date = now.toLocaleDateString('zh-CN', { year: 'numeric', month: '2-digit', day: '2-digit' });
+        const d    = now.toLocaleDateString('zh-CN', {
+            year: 'numeric', month: '2-digit', day: '2-digit'
+        });
         document.getElementById('live-clock').textContent = hms;
-        document.getElementById('live-date').textContent  = date;
+        document.getElementById('live-date').textContent  = d;
     }
     tick();
     setInterval(tick, 1000);
@@ -381,7 +380,41 @@ function toggleSort() {
 }
 
 // ============================================================
-// 迷你折线图（原生 Canvas，无需引入第三方库）
+// 趋势 → CSS class
+// 修复 Bug 5：原版只有 bull/bear/neutral 三档，偏强/偏弱无样式
+// 现在五档全部映射
+// ============================================================
+function trendClass(trend) {
+    const map = {
+        '强势': 'bull-strong',
+        '偏强': 'bull-weak',
+        '震荡': 'neutral',
+        '偏弱': 'bear-weak',
+        '弱势': 'bear-strong',
+    };
+    return map[trend] || 'neutral';
+}
+
+// ============================================================
+// 安全取数：字段可能为 null / undefined，统一返回 '-'
+// ============================================================
+function fmt(val, digits = 2) {
+    if (val == null || val === '') return '-';
+    const n = parseFloat(val);
+    return isNaN(n) ? String(val) : n.toFixed(digits);
+}
+
+function fmtChange(val) {
+    if (val == null) return { text: '-', cls: 'flat' };
+    const n = parseFloat(val);
+    if (isNaN(n)) return { text: '-', cls: 'flat' };
+    const sign = n > 0 ? '+' : '';
+    const cls  = n > 0 ? 'up' : n < 0 ? 'down' : 'flat';
+    return { text: `${sign}${n.toFixed(2)}%`, cls };
+}
+
+// ============================================================
+// 迷你折线图（原生 Canvas，无需第三方库）
 // ============================================================
 function drawMiniChart(canvas, prices) {
     if (!canvas || !prices || prices.length < 2) return;
@@ -391,24 +424,20 @@ function drawMiniChart(canvas, prices) {
     canvas.width  = W;
     canvas.height = H;
 
-    const max = Math.max(...prices);
-    const min = Math.min(...prices);
+    const max   = Math.max(...prices);
+    const min   = Math.min(...prices);
     const range = max - min || 1;
 
-    // 判断整体涨跌决定颜色
     const rising = prices[prices.length - 1] >= prices[0];
     const color  = rising ? '#e74c3c' : '#27ae60';
 
     ctx.clearRect(0, 0, W, H);
     ctx.beginPath();
-
     prices.forEach((p, i) => {
         const x = (i / (prices.length - 1)) * W;
         const y = H - ((p - min) / range) * (H - 6) - 3;
         i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
     });
-
-    // 描边
     ctx.strokeStyle = color;
     ctx.lineWidth   = 1.5;
     ctx.stroke();
@@ -428,13 +457,18 @@ function drawMiniChart(canvas, prices) {
 // 加载数据
 // ============================================================
 async function loadData() {
-    document.getElementById('signals-container').innerHTML     = '<div class="loading">加载中...</div>';
-    document.getElementById('run-status-container').innerHTML  = '<div class="loading">加载中...</div>';
+    // 刷新期间禁用按钮，防止重复点击
+    const btn = document.getElementById('refresh-btn');
+    if (btn) { btn.disabled = true; btn.textContent = '⏳ 加载中...'; }
+
+    document.getElementById('signals-container').innerHTML    = '<div class="loading">加载中...</div>';
+    document.getElementById('run-status-container').innerHTML = '<div class="loading">加载中...</div>';
 
     try {
+        const ts = Date.now();
         const [signalsResp, runResp] = await Promise.all([
-            fetch('data/signals.json?t='     + Date.now()),
-            fetch('data/latest_run.json?t='  + Date.now())
+            fetch('data/signals.json?t='    + ts),
+            fetch('data/latest_run.json?t=' + ts),
         ]);
 
         if (!signalsResp.ok) throw new Error(`signals.json 请求失败 (HTTP ${signalsResp.status})`);
@@ -449,7 +483,6 @@ async function loadData() {
         renderRunStatus(runData);
         updateStats(signalsData, runData);
 
-        // 【新增】记录上次刷新时间
         document.getElementById('last-refresh').textContent =
             '上次刷新：' + new Date().toLocaleTimeString('zh-CN');
 
@@ -459,6 +492,8 @@ async function loadData() {
             `<div class="error">数据加载失败：${e.message}<br>请确保数据文件已生成</div>`;
         document.getElementById('run-status-container').innerHTML =
             `<div class="error">运行状态加载失败</div>`;
+    } finally {
+        if (btn) { btn.disabled = false; btn.textContent = '🔄 刷新数据'; }
     }
 }
 
@@ -487,103 +522,112 @@ function renderSignals(data) {
 
     // 排序
     if (_sortByScore) {
-        signals.sort((a, b) => b.score - a.score);
+        signals.sort((a, b) => (b.score ?? 0) - (a.score ?? 0));
     } else {
-        signals.sort((a, b) => b.change_pct - a.change_pct);
-    }
-
-    // 趋势 → CSS 类
-    function trendClass(trend) {
-        if (['强势', '偏强'].includes(trend)) return 'bull';
-        if (['弱势', '偏弱'].includes(trend)) return 'bear';
-        return 'neutral';
+        signals.sort((a, b) => (b.change_pct ?? 0) - (a.change_pct ?? 0));
     }
 
     let html = '';
     signals.forEach((alert, idx) => {
-        const changeClass  = alert.change_pct > 0 ? 'up' : 'down';
-        const changeSymbol = alert.change_pct > 0 ? '+' : '';
-        const hasMiniChart = Array.isArray(alert.price_history) && alert.price_history.length > 1;
+        // 修复：原版用 alert.code / alert.price，
+        // build_data.py 写入的字段是 alert.symbol / alert.close
+        const symbol   = alert.symbol ?? alert.code ?? '';
+        const price    = alert.close  ?? alert.price ?? null;
+        const change   = fmtChange(alert.change_pct);
 
-        // 【新增】KDJ 指标显示
+        // 得分徽章颜色
+        const score      = alert.score ?? 0;
+        const scoreColor = score >= 2 ? '#e74c3c' : score <= -2 ? '#27ae60' : '#f39c12';
+        const scoreLabel = `得分 ${score > 0 ? '+' : ''}${score}`;
+
+        // KDJ
         const kdjHtml = (alert.kdj_k != null)
-            ? `<div class="indicator">KDJ: <span>${alert.kdj_k}/${alert.kdj_d}/${alert.kdj_j}</span></div>`
+            ? `<div class="indicator">KDJ: <span>${fmt(alert.kdj_k,1)}/${fmt(alert.kdj_d,1)}/${fmt(alert.kdj_j,1)}</span></div>`
             : '';
 
-        // 【新增】布林带宽度
+        // 布林带宽度
         const bollWidthHtml = (alert.boll_width != null)
             ? `<div class="indicator">布林宽: <span>${(alert.boll_width * 100).toFixed(1)}%</span></div>`
             : '';
 
-        // 【新增】综合得分徽章
-        const scoreColor = alert.score >= 2 ? '#e74c3c' : (alert.score <= -2 ? '#27ae60' : '#f39c12');
-        const scoreHtml  = `<span class="stock-score" style="background:${scoreColor}20;color:${scoreColor}">
-                                得分 ${alert.score > 0 ? '+' : ''}${alert.score}
-                            </span>`;
+        const hasMiniChart = Array.isArray(alert.price_history) && alert.price_history.length > 1;
+
+        // 信号列表
+        // 修复：原版用 sig.action 判断买卖方向，但 action 字段可能不含"买入/卖出"关键字
+        // 改为优先读 sig.type，再降级到 sig.action
+        const sigsHtml = (alert.signals || []).map(sig => {
+            const typeStr = (sig.type || sig.action || '').toLowerCase();
+            const sc   = typeStr.includes('买') || typeStr.includes('buy')  ? 'buy'
+                       : typeStr.includes('卖') || typeStr.includes('sell') ? 'sell'
+                       : 'neutral';
+            const icon = sc === 'buy' ? '📈' : sc === 'sell' ? '📉' : '⚠️';
+
+            // 修复 Bug 5（信号强度）：原版只有 strong/medium，漏掉"弱"档
+            const stMap   = { '强': 'strong', '中': 'medium', '弱': 'weak' };
+            const stClass = stMap[sig.strength] || 'medium';
+
+            return `
+            <div class="signal ${sc}">
+                <span class="signal-icon">${icon}</span>
+                <div class="signal-content">
+                    <div class="signal-type">[${sig.indicator ?? ''}] ${sig.type ?? ''}</div>
+                    <div class="signal-desc">${sig.desc ?? ''}</div>
+                </div>
+                <span class="signal-strength ${stClass}">${sig.strength ?? ''}</span>
+            </div>`;
+        }).join('');
 
         html += `
         <div class="stock-card">
             <div class="stock-header">
                 <div class="stock-header-left">
-                    <span class="stock-name">${alert.name}</span>
-                    <span class="stock-code">${alert.code}</span>
-                    <span class="trend-badge ${trendClass(alert.trend)}">${alert.trend}</span>
-                    ${scoreHtml}
+                    <span class="stock-name">${alert.name ?? ''}</span>
+                    <span class="stock-code">${symbol}</span>
+                    <!-- 修复 Bug 5：trendClass() 现在覆盖五档 -->
+                    <span class="trend-badge ${trendClass(alert.trend)}">${alert.trend ?? '震荡'}</span>
+                    <span class="stock-score" style="background:${scoreColor}20;color:${scoreColor}">${scoreLabel}</span>
                 </div>
                 <div class="stock-price">
-                    <div class="price">¥${alert.price}</div>
-                    <div class="change ${changeClass}">${changeSymbol}${alert.change_pct}%</div>
+                    <!-- 修复：字段名 close，不是 price -->
+                    <div class="price">¥${price != null ? fmt(price, 2) : '-'}</div>
+                    <div class="change ${change.cls}">${change.text}</div>
                 </div>
             </div>
 
             <!-- 指标行 -->
             <div class="indicators">
-                <div class="indicator">MA5: <span>${alert.ma5 ?? '-'}</span></div>
-                <div class="indicator">MA10: <span>${alert.ma10 ?? '-'}</span></div>
-                <div class="indicator">MA20: <span>${alert.ma20 ?? '-'}</span></div>
-                <div class="indicator">RSI: <span>${alert.rsi != null ? alert.rsi.toFixed(1) : '-'}</span></div>
-                <div class="indicator">MACD: <span>${alert.macd != null ? alert.macd.toFixed(4) : '-'}</span></div>
+                <div class="indicator">RSI: <span>${fmt(alert.rsi, 1)}</span></div>
+                <div class="indicator">MACD: <span>${fmt(alert.macd, 4)}</span></div>
                 ${kdjHtml}
                 ${bollWidthHtml}
+                <!-- volume_confirmed 标记 -->
+                ${alert.volume_confirmed
+                    ? '<div class="indicator" style="background:#fff3e0;color:#ef6c00;">📦 放量确认</div>'
+                    : ''}
             </div>
 
-            <!-- 【新增】迷你走势图 -->
+            <!-- 迷你走势图 -->
             ${hasMiniChart ? `
             <div class="mini-chart-wrap">
-                <div class="mini-chart-label">近期走势</div>
+                <div class="mini-chart-label">近期走势（${alert.price_history.length} 日）</div>
                 <canvas class="mini-chart" id="chart-${idx}"></canvas>
             </div>` : ''}
 
             <!-- 信号列表 -->
-            <div class="signals">
-                ${alert.signals.map(sig => {
-                    const sc = sig.action && sig.action.includes('买入') ? 'buy'
-                             : sig.action && sig.action.includes('卖出') ? 'sell'
-                             : 'neutral';
-                    const icon = sc === 'buy' ? '📈' : sc === 'sell' ? '📉' : '⚠️';
-                    const stClass = sig.strength === '强' ? 'strong' : 'medium';
-                    return `
-                    <div class="signal ${sc}">
-                        <span class="signal-icon">${icon}</span>
-                        <div class="signal-content">
-                            <div class="signal-type">[${sig.indicator}] ${sig.type}</div>
-                            <div class="signal-desc">${sig.desc}</div>
-                        </div>
-                        <span class="signal-strength ${stClass}">${sig.strength}</span>
-                    </div>`;
-                }).join('')}
-            </div>
+            <div class="signals">${sigsHtml}</div>
         </div>`;
     });
 
     container.innerHTML = html;
 
-    // 【新增】DOM 插入后再绘制 canvas（需要元素已有宽度）
+    // DOM 插入后再绘制 canvas
     requestAnimationFrame(() => {
         signals.forEach((alert, idx) => {
             if (Array.isArray(alert.price_history) && alert.price_history.length > 1) {
-                const canvas = document.getElementById(`chart-${idx}`);
-                drawMiniChart(canvas, alert.price_history);
+                drawMiniChart(
+                    document.getElementById(`chart-${idx}`),
+                    alert.price_history
+                );
             }
         });
     });
@@ -600,14 +644,17 @@ function renderRunStatus(run) {
         return;
     }
 
-    const okCount   = (run.ok   || []).length;
-    const failCount = (run.fail || []).length;
-    const noteMap   = { 'non-trading-day': '⏸️ 非交易日（展示上一交易日数据）' };
-    const noteText  = noteMap[run.note] || run.note || '';
+    const okList    = run.ok   || [];
+    const failList  = run.fail || [];
+    const okCount   = Array.isArray(okList)   ? okList.length   : okList;
+    const failCount = Array.isArray(failList) ? failList.length : failList;
 
-    // 【新增】运行耗时
+    const noteMap  = { 'non-trading-day': '⏸️ 非交易日（展示上一交易日数据）' };
+    const noteText = noteMap[run.note] || run.note || '';
+
     const durationHtml = run.duration_seconds != null
-        ? `<tr><td>运行耗时</td><td>${run.duration_seconds.toFixed(1)} 秒</td></tr>` : '';
+        ? `<tr><td>运行耗时</td><td>${parseFloat(run.duration_seconds).toFixed(1)} 秒</td></tr>`
+        : '';
 
     let html = `
     <table>
@@ -626,18 +673,24 @@ function renderRunStatus(run) {
         </tr>
         <tr>
             <td>信号数量</td>
-            <td>${run.alerts_count || 0} 个</td>
+            <td>${run.alerts_count ?? 0} 个</td>
         </tr>
         ${durationHtml}
         ${noteText ? `<tr><td>备注</td><td class="status-skip">${noteText}</td></tr>` : ''}
     </table>`;
 
-    if (failCount > 0 && run.fail) {
+    // 失败详情展开
+    if (failCount > 0 && Array.isArray(failList) && failList.length > 0) {
         html += `
         <details style="margin-top:15px;">
             <summary style="cursor:pointer;color:#666;">查看失败详情 (${failCount})</summary>
             <ul style="margin-top:10px;color:#666;padding-left:18px;">
-                ${run.fail.map(f => `<li>${f.name || f.code}：${f.error || '未知错误'}</li>`).join('')}
+                ${failList.map(f => {
+                    // fail 列表可能是字符串（股票代码）或对象
+                    const label = typeof f === 'string' ? f : (f.name || f.code || f.symbol || JSON.stringify(f));
+                    const err   = typeof f === 'object' ? (f.error || '') : '';
+                    return `<li>${label}${err ? '：' + err : ''}</li>`;
+                }).join('')}
             </ul>
         </details>`;
     }
@@ -649,12 +702,14 @@ function renderRunStatus(run) {
 // 更新统计数字
 // ============================================================
 function updateStats(signalsData, runData) {
-    const signals     = signalsData.signals || [];
-    // 【优化】强势+偏强 / 弱势+偏弱 分别统计
+    const signals = signalsData.signals || [];
+
+    // 修复 Bug 9/10：监控总数读 watchlist_count，原版读 signals.length（只有有信号的才算）
+    const total       = signalsData.watchlist_count ?? signals.length;
     const strongCount = signals.filter(s => ['强势', '偏强'].includes(s.trend)).length;
     const weakCount   = signals.filter(s => ['弱势', '偏弱'].includes(s.trend)).length;
 
-    document.getElementById('stat-total').textContent  = signals.length;
+    document.getElementById('stat-total').textContent  = total;
     document.getElementById('stat-alerts').textContent = signals.length;
     document.getElementById('stat-strong').textContent = strongCount;
     document.getElementById('stat-weak').textContent   = weakCount;
@@ -673,7 +728,6 @@ function updateStats(signalsData, runData) {
 document.addEventListener('DOMContentLoaded', () => {
     startClock();
     loadData();
-    // 每60秒自动刷新
     setInterval(loadData, 60_000);
 });
 </script>
