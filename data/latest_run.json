@@ -1,8 +1,7 @@
 {
-  "time": "2026-03-02T00:16:04.974798",
+  "time": "2026-03-02T00:30:09.153387",
   "ok": [],
   "fail": [],
   "alerts_count": 0,
-  "success_rate": "0/0",
-  "note": "non-trading-day"
+  "note": "force_run"
 }
