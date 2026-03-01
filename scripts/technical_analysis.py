@@ -3,12 +3,13 @@
 支持：均线、MACD、RSI、布林带、KDJ，带重试机制
 """
 
+import time
 import pandas as pd
 import numpy as np
-from tenacity import retry, stop_after_attempt, wait_exponential
 
 
-@retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=1, max=8))
+# ==================== 数据获取 ====================
+
 def get_stock_data(code, days=60):
     """
     从akshare获取A股历史数据（带重试机制）
@@ -23,24 +24,43 @@ def get_stock_data(code, days=60):
     import akshare as ak
     from datetime import datetime, timedelta
 
-    end_date = datetime.now()
-    # 【优化1】多缓冲30天（原版+20），给停牌/节假日更多余量
+    end_date   = datetime.now()
     start_date = end_date - timedelta(days=days + 30)
 
-    df = ak.stock_zh_a_hist(
-        symbol=code,
-        period="daily",
-        start_date=start_date.strftime('%Y%m%d'),
-        end_date=end_date.strftime('%Y%m%d'),
-        adjust="qfq"
-    )
+    start_str = start_date.strftime('%Y%m%d')
+    end_str   = end_date.strftime('%Y%m%d')
 
-    # 【优化2】空数据校验
+    # ── 外层重试（替换 tenacity，行为更可控）────────────────
+    MAX_RETRIES  = 3
+    RETRY_DELAYS = [3, 8, 15]   # 递增等待，给服务器喘息时间
+    last_error   = None
+
+    for attempt in range(MAX_RETRIES):
+        try:
+            df = ak.stock_zh_a_hist(
+                symbol=code,
+                period="daily",
+                start_date=start_str,
+                end_date=end_str,
+                adjust="qfq"
+            )
+            break   # 成功则跳出
+
+        except Exception as e:
+            last_error = e
+            if attempt < MAX_RETRIES - 1:
+                wait = RETRY_DELAYS[attempt]
+                print(f"  ⚠️  {code} 第{attempt + 1}次请求失败，{wait}s 后重试... ({e})")
+                time.sleep(wait)
+            else:
+                raise RuntimeError(
+                    f"获取 {code} 数据失败，已重试 {MAX_RETRIES} 次: {last_error}"
+                )
+
+    # 空数据校验
     if df is None or df.empty:
         raise ValueError(f"无数据返回: {code}")
 
-    # 【优化3】原版 <60 直接抛异常，新股/停牌必报错
-    # 改为：<20 才是真正无法计算，20~60 之间给警告但继续运行
     if len(df) < 20:
         raise ValueError(f"数据严重不足 {code}: 仅 {len(df)} 条，无法计算指标")
     if len(df) < 60:
@@ -56,12 +76,10 @@ def get_stock_data(code, days=60):
         '成交量': 'volume'
     })
 
-    # 转换日期并排序
     df['date'] = pd.to_datetime(df['date'])
     df = df.sort_values('date')
     df.set_index('date', inplace=True)
 
-    # 【优化4】akshare 偶尔会多返回"涨跌幅"等列，只取需要的列，避免后续 KeyError
     available = [c for c in ['open', 'high', 'low', 'close', 'volume'] if c in df.columns]
     df = df[available].astype(float)
 
@@ -73,7 +91,7 @@ def get_stock_data(code, days=60):
 def calculate_ma(data, periods=None):
     """
     计算移动平均线
-    【优化5】periods 改为 None 默认值，避免 Python 可变默认参数陷阱
+    periods 默认 None，避免可变默认参数陷阱
     """
     if periods is None:
         periods = [5, 10, 20, 60]
@@ -87,8 +105,8 @@ def calculate_macd(data, fast=12, slow=26, signal=9):
     ema_fast = data['close'].ewm(span=fast, adjust=False).mean()
     ema_slow = data['close'].ewm(span=slow, adjust=False).mean()
 
-    data['DIF'] = ema_fast - ema_slow
-    data['DEA'] = data['DIF'].ewm(span=signal, adjust=False).mean()
+    data['DIF']  = ema_fast - ema_slow
+    data['DEA']  = data['DIF'].ewm(span=signal, adjust=False).mean()
     data['MACD'] = 2 * (data['DIF'] - data['DEA'])
     return data
 
@@ -96,40 +114,40 @@ def calculate_macd(data, fast=12, slow=26, signal=9):
 def calculate_rsi(data, period=14):
     """
     计算RSI相对强弱指数
-    【优化6】原版用 rolling mean 计算 avg_gain/avg_loss，
-    标准 Wilder RSI 应用 EWM（com=period-1），结果更准确
+    使用标准 Wilder EWM（com=period-1），比 rolling mean 更准确
     """
     delta = data['close'].diff()
-    gain = delta.where(delta > 0, 0.0)
-    loss = -delta.where(delta < 0, 0.0)
+    gain  = delta.where(delta > 0, 0.0)
+    loss  = -delta.where(delta < 0, 0.0)
 
     avg_gain = gain.ewm(com=period - 1, min_periods=period, adjust=False).mean()
     avg_loss = loss.ewm(com=period - 1, min_periods=period, adjust=False).mean()
 
-    rs = avg_gain / avg_loss.replace(0, np.nan)
-    data['RSI'] = 100 - (100 / (1 + rs))
+    rs           = avg_gain / avg_loss.replace(0, np.nan)
+    data['RSI']  = 100 - (100 / (1 + rs))
     return data
 
 
 def calculate_bollinger(data, period=20, std_dev=2):
-    """计算布林带"""
-    data['BOLL_MID'] = data['close'].rolling(window=period, min_periods=1).mean()
-    data['BOLL_STD'] = data['close'].rolling(window=period, min_periods=1).std()
+    """计算布林带（含宽度和 %B）"""
+    data['BOLL_MID']   = data['close'].rolling(window=period, min_periods=1).mean()
+    data['BOLL_STD']   = data['close'].rolling(window=period, min_periods=1).std()
     data['BOLL_UPPER'] = data['BOLL_MID'] + (data['BOLL_STD'] * std_dev)
     data['BOLL_LOWER'] = data['BOLL_MID'] - (data['BOLL_STD'] * std_dev)
 
-    # 【优化7】新增布林带宽度和%B，check_signals 里可以直接用
-    data['BOLL_WIDTH'] = (data['BOLL_UPPER'] - data['BOLL_LOWER']) / data['BOLL_MID']
-    data['BOLL_PCT_B'] = (data['close'] - data['BOLL_LOWER']) / (
-        data['BOLL_UPPER'] - data['BOLL_LOWER']
-    ).replace(0, np.nan)
-
+    data['BOLL_WIDTH'] = (
+        (data['BOLL_UPPER'] - data['BOLL_LOWER']) / data['BOLL_MID']
+    )
+    data['BOLL_PCT_B'] = (
+        (data['close'] - data['BOLL_LOWER']) /
+        (data['BOLL_UPPER'] - data['BOLL_LOWER']).replace(0, np.nan)
+    )
     return data
 
 
 def calculate_kdj(data, n=9, m1=3, m2=3):
     """计算KDJ指标"""
-    low_list = data['low'].rolling(window=n, min_periods=1).min()
+    low_list  = data['low'].rolling(window=n, min_periods=1).min()
     high_list = data['high'].rolling(window=n, min_periods=1).max()
 
     rsv = (data['close'] - low_list) / (high_list - low_list) * 100
@@ -148,8 +166,8 @@ def volume_confirm(df, n=20, ratio=1.5):
     检查是否放量
 
     Args:
-        df: DataFrame with 'volume' column
-        n: int, 移动平均周期
+        df:    DataFrame with 'volume' column
+        n:     int, 移动平均周期
         ratio: float, 放量倍数
 
     Returns:
@@ -158,9 +176,9 @@ def volume_confirm(df, n=20, ratio=1.5):
     if len(df) < n:
         return False
 
-    vol_ma = df["volume"].rolling(n).mean()
+    vol_ma      = df["volume"].rolling(n).mean()
     current_vol = df["volume"].iloc[-1]
-    avg_vol = vol_ma.iloc[-1]
+    avg_vol     = vol_ma.iloc[-1]
 
     if pd.isna(avg_vol) or avg_vol == 0:
         return False
@@ -170,8 +188,8 @@ def volume_confirm(df, n=20, ratio=1.5):
 
 def _safe_round(val, digits=2):
     """
-    【优化8】新增：统一处理 NaN/None 的安全取整，
-    避免 check_signals 返回值里散落大量 if not pd.isna(...) 判断
+    统一处理 NaN/None 的安全取整，
+    避免返回值里散落大量 if not pd.isna(...) 判断
     """
     try:
         if val is None or (isinstance(val, float) and np.isnan(val)):
@@ -188,21 +206,20 @@ def check_signals(data, code, name, config=None):
     检查交易信号
 
     Args:
-        data: DataFrame with technical indicators
-        code: str, 股票代码
-        name: str, 股票名称
+        data:   DataFrame with technical indicators
+        code:   str, 股票代码
+        name:   str, 股票名称
         config: dict, 信号阈值配置（来自 config.yaml 的 signals 节）
 
     Returns:
         dict with signal information，无信号时返回 None
     """
-    # 【优化9】从 config 读取所有阈值，不再硬编码
-    cfg         = config or {}
-    rsi_ob      = cfg.get("rsi", {}).get("overbought", 70)
-    rsi_os      = cfg.get("rsi", {}).get("oversold",   30)
-    vol_ratio   = cfg.get("volume", {}).get("ratio",   1.5)
-    kdj_ob      = cfg.get("kdj", {}).get("overbought", 80)   # 新增
-    kdj_os      = cfg.get("kdj", {}).get("oversold",   20)   # 新增
+    cfg       = config or {}
+    rsi_ob    = cfg.get("rsi",    {}).get("overbought", 70)
+    rsi_os    = cfg.get("rsi",    {}).get("oversold",   30)
+    vol_ratio = cfg.get("volume", {}).get("ratio",      1.5)
+    kdj_ob    = cfg.get("kdj",    {}).get("overbought", 80)
+    kdj_os    = cfg.get("kdj",    {}).get("oversold",   20)
 
     if len(data) < 2:
         return None
@@ -225,8 +242,7 @@ def check_signals(data, code, name, config=None):
         })
         score += 2 if vol_ok else 1
 
-    # 均线多头排列（MA5 > MA10 > MA20）
-    # 【优化10】新增：多头排列是趋势强度的重要依据，原版完全缺失
+    # 均线多头/空头排列
     if latest['MA5'] > latest['MA10'] > latest['MA20']:
         signals.append({
             'type':      '多头排列',
@@ -249,7 +265,6 @@ def check_signals(data, code, name, config=None):
     # ── 2. MACD 金叉/死叉 ────────────────────────────────────
     if not pd.isna(prev['DIF']) and not pd.isna(prev['DEA']):
         if prev['DIF'] < prev['DEA'] and latest['DIF'] > latest['DEA']:
-            # 【优化11】区分零轴上下的金叉，零轴上金叉更强
             above_zero = latest['DIF'] > 0
             signals.append({
                 'type':      '金叉',
@@ -315,7 +330,6 @@ def check_signals(data, code, name, config=None):
             score -= 1
 
     # ── 5. KDJ 金叉/死叉 ─────────────────────────────────────
-    # 【优化12】原版算了 KDJ 但 check_signals 里完全没用，补全
     if not pd.isna(prev['K']) and not pd.isna(prev['D']):
         k_cross_up   = prev['K'] < prev['D'] and latest['K'] > latest['D']
         k_cross_down = prev['K'] > prev['D'] and latest['K'] < latest['D']
@@ -362,7 +376,7 @@ def check_signals(data, code, name, config=None):
     if not signals:
         return None
 
-    # 【优化13】趋势判定加一档"偏强/偏弱"，原版只有强势/弱势/震荡太粗
+    # 趋势判定（五档）
     if score >= 4:
         trend = '强势'
     elif score >= 2:
@@ -385,17 +399,17 @@ def check_signals(data, code, name, config=None):
                                 2
                             ),
         'volume':           int(latest['volume']) if not pd.isna(latest['volume']) else 0,
-        'ma5':              _safe_round(latest['MA5'],  2),
-        'ma10':             _safe_round(latest['MA10'], 2),
-        'ma20':             _safe_round(latest['MA20'], 2),
-        'rsi':              _safe_round(latest['RSI'],  2),
-        'macd':             _safe_round(latest['MACD'], 4),
-        'kdj_k':            _safe_round(latest['K'],    2),   # 【优化12 续】
-        'kdj_d':            _safe_round(latest['D'],    2),
-        'kdj_j':            _safe_round(latest['J'],    2),
+        'ma5':              _safe_round(latest['MA5'],        2),
+        'ma10':             _safe_round(latest['MA10'],       2),
+        'ma20':             _safe_round(latest['MA20'],       2),
+        'rsi':              _safe_round(latest['RSI'],        2),
+        'macd':             _safe_round(latest['MACD'],       4),
+        'kdj_k':            _safe_round(latest['K'],          2),
+        'kdj_d':            _safe_round(latest['D'],          2),
+        'kdj_j':            _safe_round(latest['J'],          2),
         'boll_upper':       _safe_round(latest['BOLL_UPPER'], 2),
         'boll_lower':       _safe_round(latest['BOLL_LOWER'], 2),
-        'boll_width':       _safe_round(latest.get('BOLL_WIDTH'), 4),  # 【优化7 续】
+        'boll_width':       _safe_round(latest.get('BOLL_WIDTH'), 4),
         'signals':          signals,
         'score':            score,
         'trend':            trend,
