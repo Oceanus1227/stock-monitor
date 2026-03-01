@@ -73,6 +73,7 @@ def get_mock_data(code, days=60):
     data.set_index('date', inplace=True)
     return data
 
+
 def get_akshare_data(code, days=60):
     """
     从akshare获取A股历史数据（真实数据）
@@ -120,8 +121,8 @@ def get_akshare_data(code, days=60):
         return df
 
     except Exception as e:
-    print(f"⚠️ akshare获取失败({e})，使用模拟数据: {code}")
-    return get_mock_data(code, days)
+        print(f"⚠️ akshare获取失败({e})，使用模拟数据: {code}")
+        return get_mock_data(code, days)
 
 
 # ==================== 主流程 ====================
