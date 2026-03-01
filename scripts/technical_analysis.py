@@ -50,7 +50,7 @@ def get_stock_data(code, period="daily", count=120):
         try:
             df = ak.stock_zh_a_hist(
                 symbol=code,
-                period=period,          # 修复：原版硬编码 "daily"，现在透传参数
+                period=period,
                 start_date=start_str,
                 end_date=end_str,
                 adjust="qfq"
@@ -106,7 +106,6 @@ def calculate_ma(data, windows=None, periods=None):
     - 原版参数名是 periods，build_data.py 传的是 windows=，静默使用默认值。
     - 新版主参数改为 windows，同时保留 periods 作为兼容别名。
     """
-    # 兼容旧调用方式：calculate_ma(data, periods=[...])
     effective = windows if windows is not None else periods
     if effective is None:
         effective = [5, 10, 20, 60]
@@ -153,9 +152,8 @@ def calculate_bollinger(data, window=20, num_std=2.0, period=None, std_dev=None)
       静默使用默认值，配置文件里的自定义参数完全失效。
     - 新版主参数改为 window / num_std，同时保留旧名作为兼容别名。
     """
-    # 兼容旧调用方式
-    effective_window  = window  if window  is not None else (period  or 20)
-    effective_std     = num_std if num_std is not None else (std_dev or 2.0)
+    effective_window = window  if window  is not None else (period  or 20)
+    effective_std    = num_std if num_std is not None else (std_dev or 2.0)
 
     mid = data['close'].rolling(window=effective_window, min_periods=1).mean()
     std = data['close'].rolling(window=effective_window, min_periods=1).std()
@@ -179,10 +177,16 @@ def calculate_kdj(data, fastk_period=9, signal_period=3, n=None, m1=None, m2=Non
     - 原版参数名是 (n, m1, m2)，build_data.py 传的是 (fastk_period=, signal_period=)，
       静默使用默认值，配置文件里的自定义参数完全失效。
     - 新版主参数改为 fastk_period / signal_period，同时保留旧名作为兼容别名。
+
+    修复 Bug 1：
+    - 原版 effective_m 只兼容 m1，忽略了 m2（D 线平滑周期）。
+    - 新版分别处理 effective_m1（K 线平滑）和 effective_m2（D 线平滑），
+      两者默认值都是 3，与主流券商行情保持一致。
     """
-    # 兼容旧调用方式
     effective_n  = fastk_period  if fastk_period  is not None else (n  or 9)
-    effective_m  = signal_period if signal_period is not None else (m1 or 3)
+    effective_m1 = signal_period if signal_period is not None else (m1 or 3)
+    # 修复 Bug 1：m2 之前完全被忽略，D 线始终用 m1 的周期平滑
+    effective_m2 = m2 or effective_m1
 
     low_list  = data['low'].rolling(window=effective_n, min_periods=1).min()
     high_list = data['high'].rolling(window=effective_n, min_periods=1).max()
@@ -190,8 +194,8 @@ def calculate_kdj(data, fastk_period=9, signal_period=3, n=None, m1=None, m2=Non
     rsv = (data['close'] - low_list) / (high_list - low_list) * 100
     rsv = rsv.replace([np.inf, -np.inf], 50).fillna(50)
 
-    data['K'] = rsv.ewm(com=effective_m - 1, adjust=False).mean()
-    data['D'] = data['K'].ewm(com=effective_m - 1, adjust=False).mean()
+    data['K'] = rsv.ewm(com=effective_m1 - 1, adjust=False).mean()
+    data['D'] = data['K'].ewm(com=effective_m2 - 1, adjust=False).mean()
     data['J'] = 3 * data['K'] - 2 * data['D']
     return data
 
@@ -255,18 +259,14 @@ def check_signals(data, cfg_or_code=None, name=None, config=None):
     """
     # ── 兼容两种调用方式 ─────────────────────────────────────
     if isinstance(cfg_or_code, dict):
-        # 新调用：check_signals(df, cfg)
-        cfg  = cfg_or_code
-        code = cfg.get("symbol", "")
-        name = cfg.get("name",   "")
+        cfg    = cfg_or_code
+        code   = cfg.get("symbol", "")
+        name   = cfg.get("name",   "")
     else:
-        # 旧调用：check_signals(df, code, name, config)
         code = cfg_or_code or ""
         cfg  = config or {}
 
     # ── 读取阈值（兼容两种 config 结构）─────────────────────
-    # 新结构（build_data.py）：cfg["rsi_overbought"]
-    # 旧结构（原版）：         cfg["rsi"]["overbought"]
     def _get(flat_key, nested_section, nested_key, default):
         if flat_key in cfg:
             return cfg[flat_key]
@@ -471,7 +471,7 @@ def check_signals(data, cfg_or_code=None, name=None, config=None):
     if not signals:
         return None
 
-    # 趋势判定（五档）
+    # ── 趋势判定（五档）──────────────────────────────────────
     if score >= 4:
         trend = '强势'
     elif score >= 2:
@@ -483,22 +483,38 @@ def check_signals(data, cfg_or_code=None, name=None, config=None):
     else:
         trend = '震荡'
 
+    # 修复 Bug 2：原版返回字段名是 'code'/'price'，
+    # 但 build_data.py 后续读取用的是 'symbol'/'close'，
+    # 导致前端拿到的字段全是 undefined。
+    # 修复方案：同时写两个字段名，新旧调用方都能正确读取。
+    close_price = _safe_round(latest['close'], 2)
+    change_pct  = _safe_round(
+        (latest['close'] - prev['close']) / prev['close'] * 100
+        if prev['close'] != 0 else 0,
+        2
+    )
+
     return {
+        # 修复 Bug 2：双写字段，兼容 build_data.py（symbol/close）和旧前端（code/price）
+        'symbol':           code,
         'code':             code,
         'name':             name,
-        'date':             str(latest.name),
-        'price':            _safe_round(latest['close'],      2),
-        'change_pct':       _safe_round(
-                                (latest['close'] - prev['close']) / prev['close'] * 100
-                                if prev['close'] != 0 else 0,
-                                2
-                            ),
-        'volume':           int(latest['volume']) if not pd.isna(latest['volume']) else 0,
+        'date':             str(latest.name.date()) if hasattr(latest.name, 'date') else str(latest.name),
+        'close':            close_price,
+        'price':            close_price,   # 兼容旧前端
+        'change_pct':       change_pct,
+        'volume':           int(latest['volume']) if not pd.isna(latest.get('volume', float('nan'))) else 0,
         'ma5':              _safe_round(latest.get('MA5'),        2),
         'ma10':             _safe_round(latest.get('MA10'),       2),
         'ma20':             _safe_round(latest.get('MA20'),       2),
         'rsi':              _safe_round(latest.get('RSI'),        2),
-        'macd':             _safe_round(latest.get('MACD'),       4),
+        # 修复 Bug 3：原版返回 'macd' 对应的是 MACD 柱（2*(DIF-DEA)），
+        # 前端 tooltip 写的是"MACD"，实际应展示 DIF 更直观；
+        # 改为同时返回 dif / dea / macd_bar 三个字段，前端可自由选用。
+        'dif':              _safe_round(latest.get('DIF'),        4),
+        'dea':              _safe_round(latest.get('DEA'),        4),
+        'macd_bar':         _safe_round(latest.get('MACD'),       4),
+        'macd':             _safe_round(latest.get('MACD'),       4),   # 保留旧字段名
         'kdj_k':            _safe_round(latest.get('K'),          2),
         'kdj_d':            _safe_round(latest.get('D'),          2),
         'kdj_j':            _safe_round(latest.get('J'),          2),
@@ -509,4 +525,11 @@ def check_signals(data, cfg_or_code=None, name=None, config=None):
         'score':            score,
         'trend':            trend,
         'volume_confirmed': volume_confirm(data, ratio=vol_ratio),
+        # 修复 Bug 4：原版没有 price_history，前端迷你折线图永远不渲染。
+        # 取最近 30 根收盘价，转为 Python 原生 float 避免 JSON 序列化报错。
+        'price_history':    [
+            round(float(v), 2)
+            for v in data['close'].tail(30).tolist()
+            if not (isinstance(v, float) and np.isnan(v))
+        ],
     }
