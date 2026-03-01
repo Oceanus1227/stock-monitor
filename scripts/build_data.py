@@ -29,23 +29,18 @@ def load_config(path="configs/config.yaml"):
 
 def is_trading_day(check_date=None):
     """
-    【优化1】原版只有 2025~2026 部分节假日，且写死在代码里。
-    改为：优先用 akshare 的交易日历接口，失败时降级到本地规则。
-    这样以后不用每年手动更新节假日。
+    优先用 akshare 交易日历接口，失败时降级到本地节假日规则。
     """
     target = check_date or date.today()
 
-    # 周末直接排除
     if target.weekday() >= 5:
         return False
 
-    # 优先尝试 akshare 交易日历（最准确）
     try:
         import akshare as ak
         import pandas as pd
-        year = str(target.year)
+        # 修复：删除了无用的 year = str(target.year)
         trade_cal = ak.tool_trade_date_hist_sina()
-        # 返回的是 DataFrame，列名为 trade_date
         trade_dates = pd.to_datetime(trade_cal["trade_date"]).dt.date.tolist()
         return target in trade_dates
     except Exception:
@@ -77,8 +72,7 @@ def is_trading_day(check_date=None):
 
 def get_last_real_trading_date():
     """
-    【优化2】新增：自动往前找最近一个真实交易日（最多回溯7天）。
-    原版没有这个函数，非交易日只能靠已有文件，首次运行永远是空。
+    自动往前找最近一个真实交易日（最多回溯7天）。
     """
     for i in range(1, 8):
         candidate = date.today() - timedelta(days=i)
@@ -99,12 +93,14 @@ def should_push(symbol, throttle_minutes):
             try:
                 state = json.load(f)
             except json.JSONDecodeError:
-                # 【优化3】原版没有异常处理，state.json 损坏会直接崩溃
+                # 修复：state.json 损坏时不崩溃，重置为空
                 state = {}
+
     last = state.get(symbol)
     now = now_cn().timestamp()
     if last and now - last < throttle_minutes * 60:
         return False
+
     state[symbol] = now
     state_path.parent.mkdir(parents=True, exist_ok=True)
     with open(state_path, "w", encoding="utf-8") as f:
@@ -126,17 +122,14 @@ def push_feishu(text, webhook=None):
 
 def write_signals_json(data_dir, alerts, is_last_trading=False, note=None):
     """
-    【优化4】原版有 ensure_signals_json（只写空占位）和散落的 json.dump，
-    统一成一个函数，所有写入 signals.json 的地方都走这里，避免字段遗漏。
+    统一写入 signals.json 的入口，避免字段遗漏。
     """
     data_dir.mkdir(parents=True, exist_ok=True)
     payload = {
-        "signals":          alerts or [],
-        "update_time":      now_cn().isoformat(),
-        "is_last_trading":  is_last_trading,
-        "note":             note or "",
-        # 【优化5】新增 price_history，供前端画迷你折线图用（后面处理股票时填充）
-        # 这里先占位，实际数据在 process_stock() 里写入每个 alert
+        "signals":         alerts or [],
+        "update_time":     now_cn().isoformat(),
+        "is_last_trading": is_last_trading,
+        "note":            note or "",
     }
     with open(data_dir / "signals.json", "w", encoding="utf-8") as f:
         json.dump(payload, f, ensure_ascii=False, indent=2)
@@ -146,215 +139,176 @@ def write_run_summary(ok, fail, alerts_count=0, note=None):
     data_dir = Path(__file__).parent.parent / "data"
     data_dir.mkdir(parents=True, exist_ok=True)
     summary = {
-        "time":          now_cn().isoformat(),
-        "ok":            ok,
-        "fail":          fail,
-        "alerts_count":  alerts_count,
-        # 【优化6】新增成功率字段，前端统计卡片可以直接用
-        "success_rate":  f"{len(ok)}/{len(ok)+len(fail)}" if (ok or fail) else "0/0",
-        "note":          note,
+        "time":         now_cn().isoformat(),
+        "ok":           ok,
+        "fail":         fail,
+        "alerts_count": alerts_count,
+        "note":         note or "",
     }
     with open(data_dir / "latest_run.json", "w", encoding="utf-8") as f:
         json.dump(summary, f, ensure_ascii=False, indent=2)
 
 
-def get_last_trading_data(data_dir):
-    signals_path = data_dir / "signals.json"
-    if not signals_path.exists():
+# ==================== 核心处理 ====================
+
+def process_stock(symbol, name, cfg, data_dir):
+    """
+    处理单只股票：拉数据 → 计算指标 → 检测信号 → 返回 alert dict
+    """
+    print(f"  📈 处理 {name}({symbol}) ...")
+
+    # 拉取行情数据
+    df = get_stock_data(symbol, period=cfg.get("period", "daily"), count=cfg.get("count", 120))
+    if df is None or df.empty:
+        print(f"    ⚠️  {name} 数据获取失败，跳过")
         return None
-    try:
-        with open(signals_path, "r", encoding="utf-8") as f:
-            data = json.load(f)
-        # 只保留有真实数据的（排除纯占位）
-        if data.get("note") != "non-trading-day" and data.get("signals") is not None:
-            return data
-    except Exception:
-        pass
-    return None
 
+    # 计算各技术指标
+    df = calculate_ma(df, windows=cfg.get("ma_windows", [5, 10, 20, 60]))
+    df = calculate_macd(df,
+                        fast=cfg.get("macd_fast", 12),
+                        slow=cfg.get("macd_slow", 26),
+                        signal=cfg.get("macd_signal", 9))
+    df = calculate_rsi(df, period=cfg.get("rsi_period", 14))
+    df = calculate_bollinger(df,
+                             window=cfg.get("boll_window", 20),
+                             num_std=cfg.get("boll_std", 2.0))
+    df = calculate_kdj(df,
+                       fastk_period=cfg.get("kdj_fastk", 9),
+                       signal_period=cfg.get("kdj_signal", 3))
 
-def process_stock(stock, history_days, signals_cfg):
-    """
-    【优化7】原版主循环里每只股票的处理逻辑全部堆在 main() 里，
-    抽成独立函数后：单只股票异常不影响其他，也方便后续并发改造。
-    返回 (result_dict | None, error_str | None)
-    """
-    code = stock.get("code")
-    name = stock.get("name", code)
+    # 检测信号
+    result = check_signals(df, cfg)
+    if not result:
+        return None
 
-    try:
-        df = get_stock_data(code, days=history_days)
-        df = calculate_ma(df)
-        df = calculate_macd(df)
-        df = calculate_rsi(df)
-        df = calculate_bollinger(df)
-        df = calculate_kdj(df)
+    signals = result.get("signals", [])
+    score   = result.get("score", 0)
 
-        result = check_signals(df, code, name, config=signals_cfg)
+    if not signals:
+        return None
 
-        if result:
-            # 【优化5 续】把近20日收盘价写入，供前端迷你图使用
-            result["price_history"] = (
-                df["close"].tail(20).round(2).tolist()
-            )
-            # 【优化8】补充成交量数据，前端可展示量能柱
-            result["volume_history"] = (
-                df["volume"].tail(20).astype(int).tolist()
-            )
-
-        return result, None
-
-    except Exception as e:
-        return None, str(e)
+    # 构建 alert 条目
+    latest = df.iloc[-1]
+    alert = {
+        "symbol":         symbol,
+        "name":           name,
+        "signals":        signals,
+        "score":          score,
+        "close":          round(float(latest.get("close", 0)), 2),
+        "update_time":    now_cn().isoformat(),
+        # 近 30 日收盘价，供前端画迷你折线图
+        "price_history":  [
+            round(float(v), 2)
+            for v in df["close"].tail(30).tolist()
+        ],
+        # 近 30 日成交量
+        "volume_history": [
+            int(v)
+            for v in df["volume"].tail(30).tolist()
+        ],
+    }
+    return alert
 
 
 # ==================== 主流程 ====================
 
 def main():
-    print("=" * 60)
-    print("🚀 股票技术指标监控系统")
-    print("=" * 60)
-
-    # 加载配置
-    try:
-        cfg = load_config()
-        print("✅ 配置加载成功")
-    except Exception as e:
-        print(f"❌ 配置加载失败: {e}")
-        return
+    cfg_all  = load_config()
+    cfg      = cfg_all.get("analysis", {})
+    stocks   = cfg_all.get("stocks", [])
+    throttle = cfg_all.get("push", {}).get("throttle_minutes", 60)
 
     data_dir = Path(__file__).parent.parent / "data"
     data_dir.mkdir(parents=True, exist_ok=True)
 
-    # -------- 非交易日处理 --------
-    if cfg.get("runtime", {}).get("use_trading_calendar", True):
-        if not is_trading_day():
-            print("📅 非交易日，尝试保留上一交易日数据")
+    force_run = os.getenv("FORCE_RUN", "false").lower() == "true"
+    today     = date.today()
 
-            last_data = get_last_trading_data(data_dir)
+    # ── 交易日校验 ──────────────────────────────────────────
+    if not force_run and not is_trading_day(today):
+        print(f"📅 今天 {today} 非交易日，尝试加载历史数据...")
 
-            if last_data:
-                # 有历史数据：标记后原样保留
-                last_data["note"]            = "non-trading-day"
-                last_data["is_last_trading"] = True
-                with open(data_dir / "signals.json", "w", encoding="utf-8") as f:
-                    json.dump(last_data, f, ensure_ascii=False, indent=2)
-                print(f"  ✅ 已保留上一交易日数据，时间: {last_data.get('update_time')}")
+        # 读取已有 signals.json（如果存在）
+        signals_path = data_dir / "signals.json"
+        if signals_path.exists():
+            with open(signals_path, "r", encoding="utf-8") as f:
+                try:
+                    last_data = json.load(f)
+                except json.JSONDecodeError:
+                    last_data = None
+        else:
+            last_data = None
 
-            else:
-                # 【优化2 续】没有历史文件时，主动拉取最近交易日数据
-                print("  ⚠️ 无历史数据，尝试主动拉取最近交易日数据...")
-                last_trade_date = get_last_real_trading_date()
-                print(f"  📅 最近交易日: {last_trade_date}")
-
-                # 临时把 use_trading_calendar 关掉，复用下面的正常流程
-                cfg["runtime"]["use_trading_calendar"] = False
-                cfg["_non_trading_fallback"] = True  # 标记来源
-
+        if last_data:
+            # 修复：非交易日且有历史数据 → 只写一次 run_summary，然后直接返回
+            print("  ✅ 已有历史数据，保持原文件不变")
             write_run_summary(ok=[], fail=[], note="non-trading-day")
-
-            # 如果有历史数据直接返回，否则继续往下跑一次真实拉取
-            if last_data:
-                return
+            return
         else:
-            print("📅 交易日，正常执行")
+            # 没有历史数据，继续往下跑一次，让 signals.json 有初始内容
+            print("  ⚠️  无历史数据，继续执行首次数据构建...")
+            # 注意：这里不写 run_summary，让下面正常流程统一写
 
-    # -------- 正常交易日流程 --------
-    watchlist    = cfg.get("watchlist", [])
-    runtime_cfg  = cfg.get("runtime", {})
-    push_cfg     = cfg.get("push", {})
-    signals_cfg  = cfg.get("signals", {})
+    # ── 正常处理流程 ────────────────────────────────────────
+    print(f"\n🚀 开始处理 {len(stocks)} 只股票...\n")
 
-    throttle_minutes = push_cfg.get("throttle_minutes", 30)
-    strong_only      = push_cfg.get("strong_signal_only", True)
-    history_days     = runtime_cfg.get("history_days", 60)
+    ok_list    = []
+    fail_list  = []
+    alerts     = []
 
-    is_fallback = cfg.get("_non_trading_fallback", False)
+    for stock in stocks:
+        symbol = stock.get("symbol", "")
+        name   = stock.get("name", symbol)
 
-    print(f"📊 监控股票数: {len(watchlist)}")
-    print(f"⏱️  推送节流: {throttle_minutes} 分钟")
-    print(f"📈 历史数据: {history_days} 天")
-    print("-" * 60)
+        try:
+            alert = process_stock(symbol, name, cfg, data_dir)
+            ok_list.append(symbol)
 
-    alerts   = []
-    ok_list  = []
-    fail_list = []
+            if alert:
+                alerts.append(alert)
+                sig_count = len(alert.get("signals", []))
+                print(f"    ✅ {name}: {sig_count} 个信号，得分 {alert['score']}")
 
-    for stock in watchlist:
-        code = stock.get("code")
-        name = stock.get("name", code)
-        if not code:
-            continue
+                # 飞书推送（带节流）
+                if should_push(symbol, throttle):
+                    sig_text = "\n".join(alert["signals"])
+                    push_text = (
+                        f"📊 {name}({symbol})\n"
+                        f"收盘价: {alert['close']}\n"
+                        f"得分: {alert['score']}\n"
+                        f"信号:\n{sig_text}"
+                    )
+                    push_result = push_feishu(push_text)
 
-        print(f"\n📈 处理 {name}({code})...")
+                    # 修复：区分 skip / 成功 / 失败，不再把 skip 误报为失败
+                    if push_result.get("status") == "skip":
+                        print(f"    📱 飞书: ⏭️  未配置 webhook，跳过")
+                    elif push_result.get("ok"):
+                        print(f"    📱 飞书: ✅ 推送成功")
+                    else:
+                        print(f"    📱 飞书: ⚠️  推送失败: {push_result}")
+                else:
+                    print(f"    📱 飞书: ⏳ 节流中，跳过推送")
+            else:
+                print(f"    — {name}: 无信号")
 
-        result, error = process_stock(stock, history_days, signals_cfg)
+        except Exception as e:
+            fail_list.append(symbol)
+            print(f"    ❌ {name}({symbol}) 处理异常: {e}")
 
-        if error:
-            print(f"  ❌ 失败: {error}")
-            fail_list.append({"code": code, "name": name, "error": error})
-            continue
+    # ── 写入结果文件 ─────────────────────────────────────────
+    is_last = now_cn().hour >= 15  # 15:00 之后视为收盘后
 
-        ok_list.append({"code": code, "name": name})
-
-        if result:
-            alerts.append(result)
-            sig_count = len(result["signals"])
-            print(f"  ✅ 发现 {sig_count} 个信号，趋势: {result['trend']}")
-
-            # 飞书推送
-            should_send = (
-                result["trend"] == "强势"
-                or any(s["strength"] == "强" for s in result["signals"])
-            ) if strong_only else True
-
-            if should_send and should_push(code, throttle_minutes):
-                sig_texts = [
-                    f"[{s['indicator']}] {s['type']}: {s['desc']}"
-                    for s in result["signals"]
-                ]
-                msg = (
-                    f"🚨 股票信号提醒\n\n"
-                    f"📈 {name} ({code})\n"
-                    f"💰 现价: ¥{result['price']}\n"
-                    f"📊 趋势: {result['trend']}\n"
-                    f"🔔 信号:\n"
-                    + "".join(f"  • {t}\n" for t in sig_texts)
-                    + f"\n⏰ {now_cn().strftime('%Y-%m-%d %H:%M')}\n"
-                    f"📊 RSI: {result.get('rsi', 0):.1f} | "
-                    f"MACD: {result.get('macd', 0):.4f}"
-                )
-                push_result = push_feishu(msg)
-                status = "✅ 推送成功" if push_result.get("ok") else f"⚠️ 推送失败: {push_result}"
-                print(f"  📱 飞书: {status}")
-        else:
-            print(f"  ℹ️  无信号")
-
-    # -------- 写入结果 --------
-    note = "non-trading-fallback" if is_fallback else None
-
-    write_signals_json(
-        data_dir,
-        alerts,
-        is_last_trading=is_fallback,
-        note=note
-    )
-
+    write_signals_json(data_dir, alerts, is_last_trading=is_last)
     write_run_summary(
         ok=ok_list,
         fail=fail_list,
         alerts_count=len(alerts),
-        note=note
+        note="force_run" if force_run else "normal",
     )
 
-    # -------- 汇总输出 --------
-    print("\n" + "=" * 60)
-    print(f"✅ 完成！成功: {len(ok_list)} | 失败: {len(fail_list)} | 信号: {len(alerts)}")
-    if fail_list:
-        print("❌ 失败列表:")
-        for f in fail_list:
-            print(f"   {f['name']}({f['code']}): {f['error']}")
-    print("=" * 60)
+    print(f"\n✅ 完成：{len(ok_list)} 成功，{len(fail_list)} 失败，{len(alerts)} 个信号")
 
 
 if __name__ == "__main__":
