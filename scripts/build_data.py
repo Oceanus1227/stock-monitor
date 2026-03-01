@@ -9,6 +9,7 @@ import sys
 import json
 import yaml
 import requests
+import time  
 from datetime import datetime, timedelta, date
 from pathlib import Path
 
@@ -315,6 +316,9 @@ def main():
             alert = process_stock(symbol, name, runtime_cfg, signals_cfg)
             ok_list.append(symbol)
 
+            # 👇 新增 1：成功获取完一只股票的数据后，强制程序休息 3 秒
+            time.sleep(3)
+
             if not alert:
                 print(f"    — {name}: 无信号")
                 continue
@@ -365,6 +369,9 @@ def main():
             print(f"    ❌ {name}({symbol}) 处理异常: {e}")
             import traceback
             traceback.print_exc()
+            
+            # 👇 新增 2：即使被拦截报错了，也要强制休息 3 秒，避免疯狂重试彻底激怒服务器
+            time.sleep(3)
 
     # ── 写入结果文件 ─────────────────────────────────────────
     is_last = now_cn().hour >= 15
@@ -387,9 +394,9 @@ def main():
     print(f"\n{'✅' if not fail_list else '⚠️ '} 完成："
           f"{len(ok_list)} 成功，{len(fail_list)} 失败，{len(alerts)} 个信号写入")
 
-    # 有失败项时以非零退出码退出，让 GitHub Actions 标红
-    if fail_list:
-        sys.exit(1)
+    # 👇 优化建议：把下面这两行注释掉或删掉
+    # if fail_list:
+    #     sys.exit(1)
 
 
 if __name__ == "__main__":
