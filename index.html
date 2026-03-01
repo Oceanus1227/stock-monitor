@@ -3,51 +3,106 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>股票技术指标监控</title>
+    <title>股票技术指标监控 - Dashboard</title>
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
         body { 
             font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', sans-serif;
-            background: #f5f5f5;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
             padding: 20px;
         }
-        .header {
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            color: white;
-            padding: 30px;
-            border-radius: 12px;
-            margin-bottom: 20px;
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
         }
-        .header h1 { font-size: 28px; margin-bottom: 10px; }
-        .header .time { opacity: 0.9; }
+        .header {
+            background: rgba(255,255,255,0.95);
+            padding: 30px;
+            border-radius: 16px;
+            margin-bottom: 20px;
+            box-shadow: 0 10px 40px rgba(0,0,0,0.1);
+        }
+        .header h1 { 
+            font-size: 28px; 
+            color: #333;
+            margin-bottom: 10px;
+        }
+        .header .subtitle {
+            color: #666;
+            font-size: 14px;
+        }
+        .header .update-time {
+            color: #999;
+            font-size: 12px;
+            margin-top: 10px;
+        }
+        
         .stats {
             display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+            grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
             gap: 15px;
             margin-bottom: 20px;
         }
         .stat-card {
-            background: white;
-            padding: 20px;
-            border-radius: 10px;
-            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+            background: rgba(255,255,255,0.95);
+            padding: 25px;
+            border-radius: 12px;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.1);
             text-align: center;
         }
-        .stat-card .number { font-size: 32px; font-weight: bold; color: #667eea; }
-        .stat-card .label { color: #666; margin-top: 5px; }
-        .alerts-section { margin-bottom: 20px; }
+        .stat-card .number { 
+            font-size: 36px; 
+            font-weight: bold; 
+            color: #667eea; 
+        }
+        .stat-card .label { 
+            color: #666; 
+            margin-top: 5px;
+            font-size: 14px;
+        }
+        
+        .section {
+            background: rgba(255,255,255,0.95);
+            border-radius: 16px;
+            padding: 25px;
+            margin-bottom: 20px;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.1);
+        }
         .section-title {
             font-size: 20px;
-            margin-bottom: 15px;
-            padding-left: 10px;
+            font-weight: bold;
+            color: #333;
+            margin-bottom: 20px;
+            padding-left: 12px;
             border-left: 4px solid #667eea;
         }
+        
+        .loading {
+            text-align: center;
+            padding: 40px;
+            color: #999;
+        }
+        .error {
+            background: #fff3f3;
+            border: 1px solid #ffcdd2;
+            color: #c62828;
+            padding: 15px;
+            border-radius: 8px;
+            margin: 10px 0;
+        }
+        .empty {
+            text-align: center;
+            padding: 40px;
+            color: #999;
+        }
+        
         .stock-card {
-            background: white;
+            background: #f8f9fa;
             border-radius: 12px;
             padding: 20px;
             margin-bottom: 15px;
-            box-shadow: 0 2px 8px rgba(0,0,0,0.08);
+            border: 1px solid #e9ecef;
         }
         .stock-header {
             display: flex;
@@ -55,55 +110,31 @@
             align-items: center;
             margin-bottom: 15px;
         }
-        .stock-name { font-size: 18px; font-weight: bold; }
-        .stock-code { color: #999; font-size: 14px; }
+        .stock-name { 
+            font-size: 18px; 
+            font-weight: bold;
+            color: #333;
+        }
+        .stock-code { 
+            color: #999; 
+            font-size: 14px;
+            margin-left: 8px;
+        }
         .stock-price {
             text-align: right;
         }
-        .price { font-size: 24px; font-weight: bold; }
-        .change { font-size: 14px; }
-        .change.up { color: #e74c3c; }
-        .change.down { color: #27ae60; }
-        .indicators {
-            display: flex;
-            gap: 15px;
-            margin-bottom: 15px;
-            flex-wrap: wrap;
+        .price { 
+            font-size: 24px; 
+            font-weight: bold;
+            color: #333;
         }
-        .indicator {
-            background: #f8f9fa;
-            padding: 8px 12px;
-            border-radius: 6px;
-            font-size: 13px;
-        }
-        .indicator span { color: #666; }
-        .signals {
-            display: flex;
-            flex-direction: column;
-            gap: 8px;
-        }
-        .signal {
-            display: flex;
-            align-items: center;
-            padding: 10px 15px;
-            border-radius: 8px;
-            font-size: 14px;
-        }
-        .signal.buy { background: #fff3f3; border-left: 3px solid #e74c3c; }
-        .signal.sell { background: #f0fff0; border-left: 3px solid #27ae60; }
-        .signal.neutral { background: #fffbf0; border-left: 3px solid #f39c12; }
-        .signal-icon { margin-right: 10px; font-size: 16px; }
-        .signal-content { flex: 1; }
-        .signal-type { font-weight: bold; margin-bottom: 2px; }
-        .signal-desc { color: #666; font-size: 12px; }
-        .signal-strength {
-            padding: 2px 8px;
-            border-radius: 4px;
-            font-size: 12px;
+        .change { 
+            font-size: 14px; 
             font-weight: bold;
         }
-        .signal-strength.strong { background: #e74c3c; color: white; }
-        .signal-strength.medium { background: #f39c12; color: white; }
+        .change.up { color: #e74c3c; }
+        .change.down { color: #27ae60; }
+        
         .trend-badge {
             display: inline-block;
             padding: 4px 12px;
@@ -114,174 +145,314 @@
         .trend-badge.bull { background: #ffebee; color: #c62828; }
         .trend-badge.bear { background: #e8f5e9; color: #2e7d32; }
         .trend-badge.neutral { background: #fff3e0; color: #ef6c00; }
-        .no-signals {
-            text-align: center;
-            padding: 40px;
-            color: #999;
+        
+        .indicators {
+            display: flex;
+            gap: 12px;
+            margin: 15px 0;
+            flex-wrap: wrap;
+        }
+        .indicator {
+            background: #e9ecef;
+            padding: 6px 12px;
+            border-radius: 6px;
+            font-size: 13px;
+        }
+        .indicator span { color: #666; }
+        
+        .signals {
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+        .signal {
+            display: flex;
+            align-items: center;
+            padding: 12px 15px;
+            border-radius: 8px;
+            font-size: 14px;
+        }
+        .signal.buy { background: #ffebee; border-left: 3px solid #e74c3c; }
+        .signal.sell { background: #e8f5e9; border-left: 3px solid #27ae60; }
+        .signal.neutral { background: #fff3e0; border-left: 3px solid #f39c12; }
+        .signal-icon { margin-right: 10px; font-size: 18px; }
+        .signal-content { flex: 1; }
+        .signal-type { font-weight: bold; margin-bottom: 2px; }
+        .signal-desc { color: #666; font-size: 12px; }
+        .signal-strength {
+            padding: 2px 8px;
+            border-radius: 4px;
+            font-size: 11px;
+            font-weight: bold;
+        }
+        .signal-strength.strong { background: #e74c3c; color: white; }
+        .signal-strength.medium { background: #f39c12; color: white; }
+        
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 15px;
+        }
+        th, td {
+            padding: 12px;
+            text-align: left;
+            border-bottom: 1px solid #e9ecef;
+        }
+        th {
+            background: #f8f9fa;
+            font-weight: 600;
+            color: #666;
+            font-size: 13px;
+        }
+        td {
+            font-size: 14px;
+        }
+        tr:hover {
+            background: #f8f9fa;
+        }
+        
+        .status-ok { color: #27ae60; }
+        .status-fail { color: #e74c3c; }
+        .status-skip { color: #999; }
+        
+        .refresh-btn {
+            background: #667eea;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 8px;
+            cursor: pointer;
+            font-size: 14px;
+            margin-top: 10px;
+        }
+        .refresh-btn:hover {
+            background: #5a6fd6;
         }
     </style>
 </head>
 <body>
-    <div class="header">
-        <h1>📈 股票技术指标监控</h1>
-        <div class="time">更新时间：2026-03-01 14:22</div>
-    </div>
-    
-    <div class="stats">
-        <div class="stat-card">
-            <div class="number">6</div>
-            <div class="label">监控股票</div>
+    <div class="container">
+        <!-- Header -->
+        <div class="header">
+            <h1>📈 股票技术指标监控系统</h1>
+            <div class="subtitle">基于akshare开源数据 | 支持MA、MACD、RSI、布林带、KDJ</div>
+            <div class="update-time" id="update-time">加载中...</div>
         </div>
-        <div class="stat-card">
-            <div class="number">4</div>
-            <div class="label">今日信号</div>
+        
+        <!-- Stats -->
+        <div class="stats">
+            <div class="stat-card">
+                <div class="number" id="stat-total">-</div>
+                <div class="label">监控股票</div>
+            </div>
+            <div class="stat-card">
+                <div class="number" id="stat-alerts">-</div>
+                <div class="label">今日信号</div>
+            </div>
+            <div class="stat-card">
+                <div class="number" id="stat-strong">-</div>
+                <div class="label">强势股票</div>
+            </div>
+            <div class="stat-card">
+                <div class="number" id="stat-ok">-</div>
+                <div class="label">成功更新</div>
+            </div>
         </div>
-        <div class="stat-card">
-            <div class="number">0</div>
-            <div class="label">强势股票</div>
+        
+        <!-- Signals Section -->
+        <div class="section">
+            <div class="section-title">🔔 最新信号</div>
+            <div id="signals-container">
+                <div class="loading">加载中...</div>
+            </div>
+        </div>
+        
+        <!-- Run Status Section -->
+        <div class="section">
+            <div class="section-title">📊 运行状态</div>
+            <div id="run-status-container">
+                <div class="loading">加载中...</div>
+            </div>
+            <button class="refresh-btn" onclick="loadData()">🔄 刷新数据</button>
         </div>
     </div>
-    
-    <div class="alerts-section">
-        <h2 class="section-title">🔔 技术信号</h2>
+
+    <script>
+        // 加载数据
+        async function loadData() {
+            try {
+                // 显示加载状态
+                document.getElementById('signals-container').innerHTML = '<div class="loading">加载中...</div>';
+                document.getElementById('run-status-container').innerHTML = '<div class="loading">加载中...</div>';
+                
+                // 并行加载两个数据源
+                const [signalsResp, runResp] = await Promise.all([
+                    fetch('data/signals.json'),
+                    fetch('data/latest_run.json')
+                ]);
+                
+                const signalsData = await signalsResp.json();
+                const runData = await runResp.json();
+                
+                // 渲染
+                renderSignals(signalsData);
+                renderRunStatus(runData);
+                updateStats(signalsData, runData);
+                
+            } catch (e) {
+                console.error('加载数据失败:', e);
+                document.getElementById('signals-container').innerHTML = 
+                    `<div class="error">数据加载失败: ${e.message}<br>请确保数据文件已生成</div>`;
+                document.getElementById('run-status-container').innerHTML = 
+                    `<div class="error">运行状态加载失败</div>`;
+            }
+        }
         
-        <div class="stock-card">
-            <div class="stock-header">
-                <div>
-                    <div class="stock-name">美的集团 <span class="stock-code">000333</span></div>
-                    <span class="trend-badge neutral">震荡</span>
+        // 渲染信号列表
+        function renderSignals(data) {
+            const container = document.getElementById('signals-container');
+            const signals = data.signals || [];
+            
+            if (signals.length === 0) {
+                container.innerHTML = '<div class="empty">暂无信号</div>';
+                return;
+            }
+            
+            // 按趋势强度排序
+            signals.sort((a, b) => b.score - a.score);
+            
+            let html = '';
+            signals.forEach(alert => {
+                const trendClass = alert.trend === '强势' ? 'bull' : (alert.trend === '弱势' ? 'bear' : 'neutral');
+                const changeClass = alert.change_pct > 0 ? 'up' : 'down';
+                const changeSymbol = alert.change_pct > 0 ? '+' : '';
+                
+                html += `
+                <div class="stock-card">
+                    <div class="stock-header">
+                        <div>
+                            <span class="stock-name">${alert.name}</span>
+                            <span class="stock-code">${alert.code}</span>
+                            <span class="trend-badge ${trendClass}">${alert.trend}</span>
+                        </div>
+                        <div class="stock-price">
+                            <div class="price">¥${alert.price}</div>
+                            <div class="change ${changeClass}">${changeSymbol}${alert.change_pct}%</div>
+                        </div>
+                    </div>
+                    
+                    <div class="indicators">
+                        <div class="indicator">MA5: <span>${alert.ma5}</span></div>
+                        <div class="indicator">MA10: <span>${alert.ma10}</span></div>
+                        <div class="indicator">MA20: <span>${alert.ma20}</span></div>
+                        <div class="indicator">RSI: <span>${alert.rsi ? alert.rsi.toFixed(1) : '-'}</span></div>
+                        <div class="indicator">MACD: <span>${alert.macd ? alert.macd.toFixed(4) : '-'}</span></div>
+                    </div>
+                    
+                    <div class="signals">
+                        ${alert.signals.map(sig => {
+                            const signalClass = sig.action && sig.action.includes('买入') ? 'buy' : 
+                                               (sig.action && sig.action.includes('卖出') ? 'sell' : 'neutral');
+                            const strengthClass = sig.strength === '强' ? 'strong' : 'medium';
+                            const icon = signalClass === 'buy' ? '📈' : (signalClass === 'sell' ? '📉' : '⚠️');
+                            return `
+                            <div class="signal ${signalClass}">
+                                <span class="signal-icon">${icon}</span>
+                                <div class="signal-content">
+                                    <div class="signal-type">[${sig.indicator}] ${sig.type}</div>
+                                    <div class="signal-desc">${sig.desc}</div>
+                                </div>
+                                <span class="signal-strength ${strengthClass}">${sig.strength}</span>
+                            </div>
+                            `;
+                        }).join('')}
+                    </div>
                 </div>
-                <div class="stock-price">
-                    <div class="price">¥107.06</div>
-                    <div class="change up">+3.17%</div>
-                </div>
-            </div>
-            <div class="indicators">
-                <div class="indicator">MA5: <span>103.72</span></div>
-                <div class="indicator">MA10: <span>99.72</span></div>
-                <div class="indicator">MA20: <span>96.8</span></div>
-                <div class="indicator">RSI: <span>79.59</span></div>
-                <div class="indicator">MACD: <span>3.1544</span></div>
-            </div>
-            <div class="signals">
+                `;
+            });
+            
+            container.innerHTML = html;
+        }
         
-
-                <div class="signal sell">
-                    <span class="signal-icon">📉</span>
-                    <div class="signal-content">
-                        <div class="signal-type">[RSI] 超买</div>
-                        <div class="signal-desc">RSI=79.6，进入超买区间</div>
-                    </div>
-                    <span class="signal-strength medium">中等</span>
-                </div>
+        // 渲染运行状态
+        function renderRunStatus(run) {
+            const container = document.getElementById('run-status-container');
             
-
-                <div class="signal neutral">
-                    <span class="signal-icon">⚠️</span>
-                    <div class="signal-content">
-                        <div class="signal-type">[BOLL] 突破上轨</div>
-                        <div class="signal-desc">股价突破布林带上轨，强势</div>
-                    </div>
-                    <span class="signal-strength medium">中等</span>
-                </div>
+            if (!run || !run.time) {
+                container.innerHTML = '<div class="empty">暂无运行记录</div>';
+                return;
+            }
             
-</div></div>
-
-        <div class="stock-card">
-            <div class="stock-header">
-                <div>
-                    <div class="stock-name">招商银行 <span class="stock-code">600036</span></div>
-                    <span class="trend-badge neutral">震荡</span>
-                </div>
-                <div class="stock-price">
-                    <div class="price">¥134.25</div>
-                    <div class="change up">+1.55%</div>
-                </div>
-            </div>
-            <div class="indicators">
-                <div class="indicator">MA5: <span>131.55</span></div>
-                <div class="indicator">MA10: <span>130.31</span></div>
-                <div class="indicator">MA20: <span>125.31</span></div>
-                <div class="indicator">RSI: <span>81.84</span></div>
-                <div class="indicator">MACD: <span>0.7822</span></div>
-            </div>
-            <div class="signals">
+            const okCount = (run.ok || []).length;
+            const failCount = (run.fail || []).length;
+            
+            let html = `
+            <table>
+                <tr>
+                    <th>项目</th>
+                    <th>值</th>
+                </tr>
+                <tr>
+                    <td>最后运行时间</td>
+                    <td>${new Date(run.time).toLocaleString('zh-CN')}</td>
+                </tr>
+                <tr>
+                    <td>成功处理</td>
+                    <td class="status-ok">${okCount} 只</td>
+                </tr>
+                <tr>
+                    <td>处理失败</td>
+                    <td class="status-fail">${failCount} 只</td>
+                </tr>
+                <tr>
+                    <td>信号数量</td>
+                    <td>${run.alerts_count || 0} 个</td>
+                </tr>
+            `;
+            
+            if (run.note) {
+                html += `<tr><td>备注</td><td>${run.note}</td></tr>`;
+            }
+            
+            html += '</table>';
+            
+            // 失败详情
+            if (failCount > 0 && run.fail) {
+                html += `
+                <details style="margin-top: 15px;">
+                    <summary style="cursor: pointer; color: #666;">查看失败详情 (${failCount})</summary>
+                    <ul style="margin-top: 10px; color: #666;">
+                        ${run.fail.map(f => `<li>${f.name || f.code}: ${f.error || '未知错误'}</li>`).join('')}
+                    </ul>
+                </details>
+                `;
+            }
+            
+            container.innerHTML = html;
+        }
         
-
-                <div class="signal sell">
-                    <span class="signal-icon">📉</span>
-                    <div class="signal-content">
-                        <div class="signal-type">[RSI] 超买</div>
-                        <div class="signal-desc">RSI=81.8，进入超买区间</div>
-                    </div>
-                    <span class="signal-strength medium">中等</span>
-                </div>
+        // 更新统计数字
+        function updateStats(signalsData, runData) {
+            const signals = signalsData.signals || [];
+            const strongCount = signals.filter(s => s.trend === '强势').length;
             
-</div></div>
-
-        <div class="stock-card">
-            <div class="stock-header">
-                <div>
-                    <div class="stock-name">比亚迪 <span class="stock-code">002594</span></div>
-                    <span class="trend-badge bear">弱势</span>
-                </div>
-                <div class="stock-price">
-                    <div class="price">¥89.32</div>
-                    <div class="change down">-0.59%</div>
-                </div>
-            </div>
-            <div class="indicators">
-                <div class="indicator">MA5: <span>90.35</span></div>
-                <div class="indicator">MA10: <span>90.59</span></div>
-                <div class="indicator">MA20: <span>90.71</span></div>
-                <div class="indicator">RSI: <span>44.76</span></div>
-                <div class="indicator">MACD: <span>0.2874</span></div>
-            </div>
-            <div class="signals">
+            document.getElementById('stat-total').textContent = signals.length;
+            document.getElementById('stat-alerts').textContent = signals.length;
+            document.getElementById('stat-strong').textContent = strongCount;
+            document.getElementById('stat-ok').textContent = (runData.ok || []).length;
+            
+            // 更新时间
+            if (signalsData.update_time) {
+                document.getElementById('update-time').textContent = 
+                    '更新时间: ' + new Date(signalsData.update_time).toLocaleString('zh-CN');
+            }
+        }
         
-
-                <div class="signal sell">
-                    <span class="signal-icon">📉</span>
-                    <div class="signal-content">
-                        <div class="signal-type">[MA] 死叉</div>
-                        <div class="signal-desc">5日线下穿10日线，短期趋势转弱</div>
-                    </div>
-                    <span class="signal-strength strong">强</span>
-                </div>
-            
-</div></div>
-
-        <div class="stock-card">
-            <div class="stock-header">
-                <div>
-                    <div class="stock-name">宁德时代 <span class="stock-code">300750</span></div>
-                    <span class="trend-badge bear">弱势</span>
-                </div>
-                <div class="stock-price">
-                    <div class="price">¥342.01</div>
-                    <div class="change down">-1.15%</div>
-                </div>
-            </div>
-            <div class="indicators">
-                <div class="indicator">MA5: <span>355.5</span></div>
-                <div class="indicator">MA10: <span>362.42</span></div>
-                <div class="indicator">MA20: <span>355.47</span></div>
-                <div class="indicator">RSI: <span>44.8</span></div>
-                <div class="indicator">MACD: <span>-1.8338</span></div>
-            </div>
-            <div class="signals">
+        // 页面加载时执行
+        document.addEventListener('DOMContentLoaded', loadData);
         
-
-                <div class="signal sell">
-                    <span class="signal-icon">📉</span>
-                    <div class="signal-content">
-                        <div class="signal-type">[MACD] 死叉</div>
-                        <div class="signal-desc">MACD死叉，动能转弱</div>
-                    </div>
-                    <span class="signal-strength strong">强</span>
-                </div>
-            
-</div></div>
-    </div>
+        // 自动刷新（每60秒）
+        setInterval(loadData, 60000);
+    </script>
 </body>
 </html>

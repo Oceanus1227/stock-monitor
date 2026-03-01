@@ -18,7 +18,7 @@
 
 ```bash
 # 克隆仓库
-git clone https://github.com/你的用户名/stock-monitor.git
+git clone https://github.com/Oceanus1227/stock-monitor.git
 cd stock-monitor
 
 # 安装依赖
@@ -60,7 +60,7 @@ python -m http.server 8000
 
 #### 步骤5：访问Dashboard
 ```
-https://你的用户名.github.io/stock-monitor/
+https://Oceanus1227.github.io/stock-monitor/
 ```
 
 ## 📊 监控股票配置

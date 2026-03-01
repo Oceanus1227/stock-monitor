@@ -1,0 +1,39 @@
+# 股票监控配置文件
+
+# 监控股票列表
+watchlist:
+  - code: "600519"
+    name: "贵州茅台"
+  - code: "000858"
+    name: "五粮液"
+  - code: "002594"
+    name: "比亚迪"
+  - code: "300750"
+    name: "宁德时代"
+  - code: "000333"
+    name: "美的集团"
+  - code: "600036"
+    name: "招商银行"
+
+# 信号阈值配置
+signals:
+  rsi:
+    overbought: 70
+    oversold: 30
+  boll:
+    breakout_pct: 0.5
+  volume:
+    ma_period: 20
+    ratio: 1.5
+
+# 运行时配置
+runtime:
+  interval_minutes: 15
+  use_trading_calendar: true
+  history_days: 60
+
+# 推送配置
+push:
+  channels: [feishu]
+  throttle_minutes: 30
+  strong_signal_only: true
