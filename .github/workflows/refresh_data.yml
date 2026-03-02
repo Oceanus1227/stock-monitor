@@ -58,6 +58,8 @@ jobs:
         env:
           FEISHU_WEBHOOK: ${{ secrets.FEISHU_WEBHOOK }}
           FORCE_RUN: ${{ github.event.inputs.force_run || 'false' }}
+          # 👇 新增：将同花顺 Token 从 Secrets 传递给 Python 环境
+          THS_REFRESH_TOKEN: ${{ secrets.THS_REFRESH_TOKEN }}
 
       - name: Commit and push data
         run: |
