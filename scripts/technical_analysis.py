@@ -80,7 +80,29 @@ def _fmt_code(code: str) -> str:
 def _parse_history_response(result: dict, fmt_code: str) -> pd.DataFrame:
     """
     解析 cmd_history_quotation 返回的 JSON。
-    以 time 列长度为基准对齐所有列，避免 All arrays must be of the same length。
+
+    iFinD 标准结构（手册第4页）：
+      {
+        "errorcode": 0,
+        "tables": [
+          {
+            "thscode": "600519.SH",
+            "table": {
+              "time":   [...],
+              "open":   [...],
+              "high":   [...],
+              "low":    [...],
+              "close":  [...],
+              "volume": [...]
+            }
+          }
+        ]
+      }
+
+    兼容以下变体：
+      - tables 是 dict（旧版）
+      - table 是行列表而非列字典
+      - 字段名大小写不一致
     """
     errorcode = result.get("errorcode", -1)
     if errorcode != 0:
@@ -96,24 +118,37 @@ def _parse_history_response(result: dict, fmt_code: str) -> pd.DataFrame:
             return lst[:n]
         return lst + [None] * (n - len(lst))
 
-    def _build_df(entry: dict) -> pd.DataFrame:
-        time_list = entry.get("time", [])
+    def _build_df_from_col_dict(col_dict: dict) -> pd.DataFrame:
+        """
+        从列字典构建 DataFrame。
+        col_dict 形如 {"time": [...], "open": [...], ...}
+        字段名自动转小写，volume 兼容 vol 别名。
+        """
+        # 字段名全部转小写
+        col_dict = {k.lower(): v for k, v in col_dict.items()}
+
+        time_list = col_dict.get("time", [])
         if not time_list:
             raise ValueError(f"{fmt_code} 返回时间序列为空")
         n = len(time_list)
+
+        # volume 兼容 vol 别名
+        vol = col_dict.get("volume") or col_dict.get("vol") or []
+
         return pd.DataFrame({
             "date":   time_list,
-            "open":   _align(entry.get("open",   []), n),
-            "high":   _align(entry.get("high",   []), n),
-            "low":    _align(entry.get("low",    []), n),
-            "close":  _align(entry.get("close",  []), n),
-            "volume": _align(entry.get("volume", []), n),
+            "open":   _align(col_dict.get("open",  []), n),
+            "high":   _align(col_dict.get("high",  []), n),
+            "low":    _align(col_dict.get("low",   []), n),
+            "close":  _align(col_dict.get("close", []), n),
+            "volume": _align(vol,                       n),
         })
 
     tables_raw = result.get("tables") or result.get("data")
 
-    # ── 形态 B：tables 是 list ────────────────────────────────
+    # ── 形态 A：tables 是 list（手册标准格式）────────────────
     if isinstance(tables_raw, list):
+        # 找到匹配 fmt_code 的条目
         stock_entry = None
         for item in tables_raw:
             if not isinstance(item, dict):
@@ -122,6 +157,7 @@ def _parse_history_response(result: dict, fmt_code: str) -> pd.DataFrame:
                 stock_entry = item
                 break
 
+        # 单股查询时列表只有一条，直接取
         if stock_entry is None:
             if len(tables_raw) == 1 and isinstance(tables_raw[0], dict):
                 stock_entry = tables_raw[0]
@@ -134,32 +170,47 @@ def _parse_history_response(result: dict, fmt_code: str) -> pd.DataFrame:
                     f"返回列表中找不到 {fmt_code}，实际包含: {codes_found}"
                 )
 
-        # 子形态 B1：行情列直接挂在 stock_entry 上
-        if "time" in stock_entry:
-            return _build_df(stock_entry)
+        # 标准结构：行情数据在 stock_entry["table"] 里（列字典）
+        raw_table = stock_entry.get("table")
 
-        # 子形态 B2：行情数据在 stock_entry["table"] 里，是行列表
-        raw_table = stock_entry.get("table", [])
-        if not raw_table:
-            raise ValueError(f"{fmt_code} 的 table 字段为空")
-        if isinstance(raw_table, list):
+        if isinstance(raw_table, dict):
+            # 标准列字典：{"time": [...], "close": [...], ...}
+            return _build_df_from_col_dict(raw_table)
+
+        if isinstance(raw_table, list) and raw_table:
+            # 行列表：[{"time": "2024-01-02", "close": 10.5, ...}, ...]
             df = pd.DataFrame(raw_table)
             df.columns = [c.lower() for c in df.columns]
             if "time" in df.columns and "date" not in df.columns:
                 df = df.rename(columns={"time": "date"})
+            if "vol" in df.columns and "volume" not in df.columns:
+                df = df.rename(columns={"vol": "volume"})
             return df
 
-        raise ValueError(f"未知的 table 格式: {type(raw_table)}")
+        # 降级：行情列直接挂在 stock_entry 上（非标准）
+        if "time" in stock_entry or "TIME" in stock_entry:
+            return _build_df_from_col_dict(stock_entry)
 
-    # ── 形态 A：tables 是 dict ────────────────────────────────
+        raise ValueError(
+            f"{fmt_code} 的 table 字段为空或格式未知，"
+            f"stock_entry keys: {list(stock_entry.keys())}"
+        )
+
+    # ── 形态 B：tables 是 dict（旧版格式）────────────────────
     if isinstance(tables_raw, dict):
-        table = tables_raw.get("table", {})
-        stock = table.get(fmt_code, {})
-        if not stock:
-            raise ValueError(
-                f"返回数据中找不到 {fmt_code}，实际 keys: {list(table.keys())}"
-            )
-        return _build_df(stock)
+        # 旧版：{"table": {"600519.SH": {"time": [...], ...}}}
+        inner = tables_raw.get("table", {})
+        if fmt_code in inner:
+            return _build_df_from_col_dict(inner[fmt_code])
+
+        # 有时 tables 本身就是列字典
+        if "time" in tables_raw or "TIME" in tables_raw:
+            return _build_df_from_col_dict(tables_raw)
+
+        raise ValueError(
+            f"返回数据中找不到 {fmt_code}，"
+            f"实际 keys: {list(inner.keys() if inner else tables_raw.keys())}"
+        )
 
     raise ValueError(
         f"无法识别的 tables 结构: {type(tables_raw)}，"
@@ -228,7 +279,8 @@ def get_stock_data(code, period="daily", count=120):
     )
 
     cols = [c for c in ["open", "high", "low", "close", "volume"] if c in df.columns]
-    df   = df[cols].apply(pd.to_numeric, errors="coerce").dropna(how="all")
+    df   = df[cols].apply(pd.to_numeric, errors="coerce")
+    df   = df.dropna(subset=["close"])          # 只要 close 有值就保留
 
     if df.empty:
         raise ValueError(f"❌ [{code}] 清洗后数据为空，请检查代码或日期范围")
