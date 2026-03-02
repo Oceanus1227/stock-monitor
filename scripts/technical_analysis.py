@@ -131,35 +131,55 @@ def _parse_history_response(result: dict, fmt_code: str) -> pd.DataFrame:
         # 字段名全部转小写
         col_dict = {k.lower(): v for k, v in col_dict.items()}
 
+        # DEBUG：打印实际字段名及首个值，便于排查（确认正常后可删除）
+        print(
+            f"  🔍 [DEBUG] table keys & samples: "
+            + str({
+                k: (v[0] if isinstance(v, list) and v else v)
+                for k, v in list(col_dict.items())[:8]
+            })
+        )
+
         # ── 探测时间列 ──────────────────────────────────────
         TIME_ALIASES = [
             "time", "date", "datetime", "trading_date",
-            "tradedate", "trade_date", "tdate", "日期"
+            "tradedate", "trade_date", "tdate", "tradingday",
+            "tradeday", "trade_day", "date_time",
+            "日期", "时间", "交易日期", "交易日",
         ]
         time_key = next(
             (a for a in TIME_ALIASES if col_dict.get(a)),
             None
         )
+
         if time_key is None:
-            # 兜底：取第一个非空 list 字段
-            time_key = next(
-                (k for k, v in col_dict.items() if isinstance(v, list) and v),
-                None
-            )
-            if time_key:
-                print(f"  ⚠️  [WARN] 未找到标准时间字段，fallback 使用 '{time_key}'")
+            # 兜底：只取值为字符串列表的字段（时间值是字符串，价格是数字）
+            for k, v in col_dict.items():
+                if isinstance(v, list) and v and isinstance(v[0], str):
+                    time_key = k
+                    print(
+                        f"  ⚠️  [WARN] 未找到标准时间字段，"
+                        f"fallback 使用 '{k}'（值样本: {v[0]}）"
+                    )
+                    break
 
         if not time_key:
             raise ValueError(
                 f"{fmt_code} 返回时间序列为空，"
-                f"实际字段: {list(col_dict.keys())}"
+                f"实际字段及样本值: "
+                + str({
+                    k: (v[0] if isinstance(v, list) and v else v)
+                    for k, v in list(col_dict.items())[:6]
+                })
             )
 
         time_list = col_dict[time_key]
         n = len(time_list)
 
         # ── 探测 close 列 ───────────────────────────────────
-        CLOSE_ALIASES = ["close", "latest", "price", "close_price", "收盘价"]
+        CLOSE_ALIASES = [
+            "close", "latest", "price", "close_price", "收盘价", "收盘",
+        ]
         close_key = next(
             (a for a in CLOSE_ALIASES if col_dict.get(a)),
             "close"
@@ -168,16 +188,16 @@ def _parse_history_response(result: dict, fmt_code: str) -> pd.DataFrame:
         # ── 探测 volume 列 ──────────────────────────────────
         VOL_ALIASES = [
             "volume", "vol", "turnovervolume", "turnover_volume",
-            "成交量", "volume(手)", "volume(股)"
+            "成交量", "volume(手)", "volume(股)", "成交量(手)",
         ]
         vol_key  = next((a for a in VOL_ALIASES if col_dict.get(a)), None)
         vol_data = col_dict.get(vol_key, []) if vol_key else []
 
         return pd.DataFrame({
             "date":   time_list,
-            "open":   _align(col_dict.get("open", []), n),
-            "high":   _align(col_dict.get("high", []), n),
-            "low":    _align(col_dict.get("low",  []), n),
+            "open":   _align(col_dict.get("open",  []), n),
+            "high":   _align(col_dict.get("high",  []), n),
+            "low":    _align(col_dict.get("low",   []), n),
             "close":  _align(col_dict.get(close_key, []), n),
             "volume": _align(vol_data, n),
         })
@@ -213,7 +233,6 @@ def _parse_history_response(result: dict, fmt_code: str) -> pd.DataFrame:
         raw_table = stock_entry.get("table")
 
         if isinstance(raw_table, dict):
-            # 标准列字典：{"time": [...], "close": [...], ...}
             return _build_df_from_col_dict(raw_table)
 
         if isinstance(raw_table, list) and raw_table:
@@ -228,7 +247,7 @@ def _parse_history_response(result: dict, fmt_code: str) -> pd.DataFrame:
 
         # 降级：行情列直接挂在 stock_entry 上（非标准）
         entry_lower = {k.lower(): v for k, v in stock_entry.items()}
-        if any(a in entry_lower for a in ["time", "date", "datetime", "日期"]):
+        if any(a in entry_lower for a in ["time", "date", "datetime", "日期", "时间"]):
             return _build_df_from_col_dict(stock_entry)
 
         raise ValueError(
@@ -238,14 +257,12 @@ def _parse_history_response(result: dict, fmt_code: str) -> pd.DataFrame:
 
     # ══ 形态 B：tables 是 dict（旧版格式）══════════════════
     if isinstance(tables_raw, dict):
-        # 旧版：{"table": {"600519.SH": {"time": [...], ...}}}
         inner = tables_raw.get("table", {})
         if fmt_code in inner:
             return _build_df_from_col_dict(inner[fmt_code])
 
-        # 有时 tables 本身就是列字典
         tables_lower = {k.lower(): v for k, v in tables_raw.items()}
-        if any(a in tables_lower for a in ["time", "date", "datetime", "日期"]):
+        if any(a in tables_lower for a in ["time", "date", "datetime", "日期", "时间"]):
             return _build_df_from_col_dict(tables_raw)
 
         raise ValueError(
@@ -267,7 +284,8 @@ def get_stock_data(code, period="daily", count=120):
 
     fetch_count = count + 30
     end_date    = datetime.now()
-    day_buffer  = {"D": 2.0, "W": 10.0, "M": 40.0}.get(interval, 2.0)
+    # A股每年约250个交易日，2.8倍缓冲确保拉取足够数据
+    day_buffer  = {"D": 2.8, "W": 12.0, "M": 45.0}.get(interval, 2.8)
     start_date  = end_date - timedelta(days=int(fetch_count * day_buffer) + 60)
 
     start_str = start_date.strftime("%Y-%m-%d")
