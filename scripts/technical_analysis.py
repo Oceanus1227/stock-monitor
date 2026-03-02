@@ -6,6 +6,7 @@
 
 import os
 import time
+import json
 import requests
 import pandas as pd
 import numpy as np
@@ -19,10 +20,6 @@ _TOKEN_CACHE = {"access_token": None, "expires_at": 0}
 
 
 def _get_access_token(force_refresh=False):
-    """
-    用 refresh_token 换取 access_token（进程内缓存 6 天）。
-    GitHub Actions 每次运行都是新进程，会自动重新获取，无需担心缓存问题。
-    """
     now = time.time()
     if (
         not force_refresh
@@ -60,7 +57,6 @@ def _get_access_token(force_refresh=False):
 
 
 def _ifind_post(endpoint, payload, access_token):
-    """通用 iFinD HTTP POST 请求"""
     url     = f"{_BASE_URL}/{endpoint}"
     headers = {
         "Content-Type":    "application/json",
@@ -85,7 +81,14 @@ def _fmt_code(code: str) -> str:
 def _parse_history_response(result: dict, fmt_code: str) -> pd.DataFrame:
     """
     解析 cmd_history_quotation 返回的 JSON。
-    兼容 tables / data 两种顶层结构。
+
+    iFinD 实际返回的 tables 字段有两种形态：
+      形态 A（dict）: {"table": {"600519.SH": {"time":[...], "close":[...], ...}}}
+      形态 B（list）: [{"thscode": "600519.SH", "time":[...], "close":[...], ...}]
+                   或 [{"thscode": "600519.SH", "table": [...行列表...]}]
+
+    本函数自动探测并兼容以上所有形态。
+    DEBUG 日志会打印原始结构前 600 字符，上线稳定后可删除。
     """
     errorcode = result.get("errorcode", -1)
     if errorcode != 0:
@@ -94,51 +97,111 @@ def _parse_history_response(result: dict, fmt_code: str) -> pd.DataFrame:
             f"{result.get('errmsg', '未知错误')}"
         )
 
-    tables = result.get("tables") or result.get("data", {})
-    table  = tables.get("table", {})
-    stock  = table.get(fmt_code, {})
+    # DEBUG：打印原始结构，方便确认真实格式（稳定后可删除这两行）
+    preview = json.dumps(result, ensure_ascii=False)[:600]
+    print(f"  🔍 [DEBUG] iFinD 原始返回预览:\n{preview}\n")
 
-    if not stock:
-        raise ValueError(
-            f"返回数据中找不到 {fmt_code}，"
-            f"实际 keys: {list(table.keys())}"
-        )
+    tables_raw = result.get("tables") or result.get("data")
 
-    time_list  = stock.get("time",   [])
-    open_list  = stock.get("open",   [])
-    high_list  = stock.get("high",   [])
-    low_list   = stock.get("low",    [])
-    close_list = stock.get("close",  [])
-    vol_list   = stock.get("volume", [])
+    # ── 形态 B：tables 是 list ────────────────────────────────
+    if isinstance(tables_raw, list):
+        # 找到匹配 fmt_code 的条目
+        stock_entry = None
+        for item in tables_raw:
+            if not isinstance(item, dict):
+                continue
+            code_key = item.get("thscode") or item.get("code", "")
+            if code_key == fmt_code:
+                stock_entry = item
+                break
 
-    if not time_list:
-        raise ValueError(f"{fmt_code} 返回时间序列为空")
+        # 单股查询时列表只有一条，直接取
+        if stock_entry is None:
+            if len(tables_raw) == 1 and isinstance(tables_raw[0], dict):
+                stock_entry = tables_raw[0]
+            else:
+                codes_found = [
+                    i.get("thscode") or i.get("code", "?")
+                    for i in tables_raw if isinstance(i, dict)
+                ]
+                raise ValueError(
+                    f"返回列表中找不到 {fmt_code}，实际包含: {codes_found}"
+                )
 
-    return pd.DataFrame({
-        "date":   time_list,
-        "open":   open_list,
-        "high":   high_list,
-        "low":    low_list,
-        "close":  close_list,
-        "volume": vol_list,
-    })
+        # 子形态 B1：行情列直接挂在 stock_entry 上
+        if "time" in stock_entry:
+            time_list  = stock_entry.get("time",   [])
+            open_list  = stock_entry.get("open",   [])
+            high_list  = stock_entry.get("high",   [])
+            low_list   = stock_entry.get("low",    [])
+            close_list = stock_entry.get("close",  [])
+            vol_list   = stock_entry.get("volume", [])
+
+            if not time_list:
+                raise ValueError(f"{fmt_code} 返回时间序列为空")
+
+            return pd.DataFrame({
+                "date":   time_list,
+                "open":   open_list,
+                "high":   high_list,
+                "low":    low_list,
+                "close":  close_list,
+                "volume": vol_list,
+            })
+
+        # 子形态 B2：行情数据在 stock_entry["table"] 里，是行列表
+        raw_table = stock_entry.get("table", [])
+        if not raw_table:
+            raise ValueError(f"{fmt_code} 的 table 字段为空")
+
+        if isinstance(raw_table, list):
+            df = pd.DataFrame(raw_table)
+            df.columns = [c.lower() for c in df.columns]
+            # 统一日期列名
+            if "time" in df.columns and "date" not in df.columns:
+                df = df.rename(columns={"time": "date"})
+            return df
+
+        raise ValueError(f"未知的 table 格式: {type(raw_table)}")
+
+    # ── 形态 A：tables 是 dict ────────────────────────────────
+    if isinstance(tables_raw, dict):
+        table = tables_raw.get("table", {})
+        stock = table.get(fmt_code, {})
+
+        if not stock:
+            raise ValueError(
+                f"返回数据中找不到 {fmt_code}，实际 keys: {list(table.keys())}"
+            )
+
+        time_list  = stock.get("time",   [])
+        open_list  = stock.get("open",   [])
+        high_list  = stock.get("high",   [])
+        low_list   = stock.get("low",    [])
+        close_list = stock.get("close",  [])
+        vol_list   = stock.get("volume", [])
+
+        if not time_list:
+            raise ValueError(f"{fmt_code} 返回时间序列为空")
+
+        return pd.DataFrame({
+            "date":   time_list,
+            "open":   open_list,
+            "high":   high_list,
+            "low":    low_list,
+            "close":  close_list,
+            "volume": vol_list,
+        })
+
+    raise ValueError(
+        f"无法识别的 tables 结构: {type(tables_raw)}，"
+        f"原始内容前 200 字符: {str(tables_raw)[:200]}"
+    )
 
 
 # ==================== 数据获取 ====================
 
 def get_stock_data(code, period="daily", count=120):
-    """
-    从 iFinD HTTP API 获取 A 股历史 K 线数据（前复权）。
-
-    Args:
-        code:   str，股票代码，如 '600519' 或 '600519.SH'
-        period: str，'daily' / 'weekly' / 'monthly'
-        count:  int，需要的 K 线条数
-
-    Returns:
-        DataFrame，index 为 pd.DatetimeIndex，
-        columns: open, high, low, close, volume（均为 float）
-    """
     period_map = {"daily": "D", "weekly": "W", "monthly": "M"}
     interval   = period_map.get(period, "D")
 
@@ -157,9 +220,9 @@ def get_stock_data(code, period="daily", count=120):
         "startdate":  start_str,
         "enddate":    end_str,
         "functionpara": {
-            "Interval": interval,    # D / W / M
-            "CPS":      "2",         # 前复权（分红再投），最适合技术分析
-            "Fill":     "Previous",  # 非交易日沿用前值
+            "Interval": interval,
+            "CPS":      "2",
+            "Fill":     "Previous",
             "Currency": "RMB",
         },
     }
@@ -171,7 +234,6 @@ def get_stock_data(code, period="daily", count=120):
 
     for attempt in range(MAX_RETRIES):
         try:
-            # 首次失败后强制刷新 token，防止 token 恰好在运行中过期
             access_token = _get_access_token(force_refresh=(attempt > 0))
             result = _ifind_post("cmd_history_quotation", payload, access_token)
             break
@@ -187,7 +249,6 @@ def get_stock_data(code, period="daily", count=120):
                     f"最后错误: {last_error}"
                 ) from last_error
 
-    # 解析返回数据
     df = _parse_history_response(result, fmt_code)
 
     df["date"] = pd.to_datetime(df["date"])
@@ -216,27 +277,17 @@ def get_stock_data(code, period="daily", count=120):
 # ==================== 技术指标计算 ====================
 
 def calculate_ma(data, windows=None, periods=None):
-    """
-    计算移动平均线
-
-    参数：
-        windows: 主参数，list，如 [5, 10, 20, 60]
-        periods: 兼容别名，与 windows 等价
-    """
     effective = windows if windows is not None else periods
     if effective is None:
         effective = [5, 10, 20, 60]
-
     for w in effective:
         data[f'MA{w}'] = data['close'].rolling(window=w, min_periods=1).mean()
     return data
 
 
 def calculate_macd(data, fast=12, slow=26, signal=9):
-    """计算 MACD 指标（DIF / DEA / MACD 柱）"""
     ema_fast = data['close'].ewm(span=fast, adjust=False).mean()
     ema_slow = data['close'].ewm(span=slow, adjust=False).mean()
-
     data['DIF']  = ema_fast - ema_slow
     data['DEA']  = data['DIF'].ewm(span=signal, adjust=False).mean()
     data['MACD'] = 2 * (data['DIF'] - data['DEA'])
@@ -244,41 +295,25 @@ def calculate_macd(data, fast=12, slow=26, signal=9):
 
 
 def calculate_rsi(data, period=14):
-    """
-    计算 RSI 相对强弱指数
-    使用标准 Wilder EWM（com=period-1）
-    """
     delta    = data['close'].diff()
     gain     = delta.where(delta > 0, 0.0)
     loss     = -delta.where(delta < 0, 0.0)
-
     avg_gain = gain.ewm(com=period - 1, min_periods=period, adjust=False).mean()
     avg_loss = loss.ewm(com=period - 1, min_periods=period, adjust=False).mean()
-
     rs          = avg_gain / avg_loss.replace(0, np.nan)
     data['RSI'] = 100 - (100 / (1 + rs))
     return data
 
 
 def calculate_bollinger(data, window=None, num_std=None, period=None, std_dev=None):
-    """
-    计算布林带（含宽度和 %B）
-
-    参数：
-        window / period:   均线窗口期，默认 20
-        num_std / std_dev: 标准差倍数，默认 2.0
-    """
     effective_window = window  or period  or 20
     effective_std    = num_std or std_dev or 2.0
-
     mid = data['close'].rolling(window=effective_window, min_periods=1).mean()
     std = data['close'].rolling(window=effective_window, min_periods=1).std()
-
     data['BOLL_MID']   = mid
     data['BOLL_STD']   = std
     data['BOLL_UPPER'] = mid + std * effective_std
     data['BOLL_LOWER'] = mid - std * effective_std
-
     band_width = (data['BOLL_UPPER'] - data['BOLL_LOWER']).replace(0, np.nan)
     data['BOLL_WIDTH'] = band_width / data['BOLL_MID']
     data['BOLL_PCT_B'] = (data['close'] - data['BOLL_LOWER']) / band_width
@@ -286,24 +321,13 @@ def calculate_bollinger(data, window=None, num_std=None, period=None, std_dev=No
 
 
 def calculate_kdj(data, fastk_period=None, signal_period=None, n=None, m1=None, m2=None):
-    """
-    计算 KDJ 指标
-
-    参数：
-        fastk_period / n:    RSV 窗口期，默认 9
-        signal_period / m1:  K 线平滑周期，默认 3
-        m2:                  D 线平滑周期，默认与 m1 相同
-    """
     effective_n  = fastk_period  or n  or 9
     effective_m1 = signal_period or m1 or 3
     effective_m2 = m2 or effective_m1
-
     low_list  = data['low'].rolling(window=effective_n, min_periods=1).min()
     high_list = data['high'].rolling(window=effective_n, min_periods=1).max()
-
     rsv = (data['close'] - low_list) / (high_list - low_list) * 100
     rsv = rsv.replace([np.inf, -np.inf], 50).fillna(50)
-
     data['K'] = rsv.ewm(com=effective_m1 - 1, adjust=False).mean()
     data['D'] = data['K'].ewm(com=effective_m2 - 1, adjust=False).mean()
     data['J'] = 3 * data['K'] - 2 * data['D']
@@ -313,24 +337,19 @@ def calculate_kdj(data, fastk_period=None, signal_period=None, n=None, m1=None, 
 # ==================== 辅助函数 ====================
 
 def volume_confirm(df, n=20, ratio=1.5):
-    """检查最新一根 K 线是否放量"""
     if 'volume' not in df.columns or len(df) < 2:
         return False
-
     if len(df) < n + 1:
         print(f"  ⚠️  volume_confirm: 数据仅 {len(df)} 条，不足 {n+1} 条，均量精度下降")
         avg_vol = df['volume'].iloc[:-1].mean()
     else:
         avg_vol = df['volume'].iloc[-n - 1:-1].mean()
-
     if avg_vol <= 0 or pd.isna(avg_vol):
         return False
-
     return bool(df['volume'].iloc[-1] > avg_vol * ratio)
 
 
 def _safe_round(val, digits=2):
-    """安全取整，NaN / None 返回 None"""
     try:
         if val is None or pd.isna(val):
             return None
@@ -340,7 +359,6 @@ def _safe_round(val, digits=2):
 
 
 def _safe_int_volume(val):
-    """安全地将成交量转为 int，NaN 时返回 0"""
     try:
         if val is None or pd.isna(val):
             return 0
@@ -352,16 +370,6 @@ def _safe_int_volume(val):
 # ==================== 信号检测 ====================
 
 def check_signals(data, cfg_or_code=None, name=None, config=None):
-    """
-    检查交易信号
-
-    调用方式（两种均支持）：
-        check_signals(df, cfg_dict)           ← build_data.py 的调用方式
-        check_signals(df, "600519", "贵州茅台") ← 旧版调用方式
-
-    Returns:
-        dict（有信号时）或 None（无信号时）
-    """
     if isinstance(cfg_or_code, dict):
         cfg  = cfg_or_code
         code = cfg.get("symbol", "")
@@ -386,7 +394,6 @@ def check_signals(data, cfg_or_code=None, name=None, config=None):
 
     latest = data.iloc[-1]
     prev   = data.iloc[-2]
-
     signals = []
     score   = 0
 
