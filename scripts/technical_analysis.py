@@ -806,3 +806,140 @@ def check_signals(data, cfg_or_code=None, name=None, config=None):
             if pd.notna(v)
         ],
     }
+# ==================== 飞书卡片信号判定（追加在文件末尾）====================
+
+def check_buy_signals_card(df):
+    """为飞书卡片生成买入信号 dict，列名适配本项目"""
+    latest = df.iloc[-1]
+    prev   = df.iloc[-2]
+    signals = {}
+
+    # MA
+    ma_golden_cross = prev['MA5'] <= prev['MA20'] and latest['MA5'] > latest['MA20']
+    ma_bullish      = (latest['MA5'] > latest['MA10'] > latest['MA20'])
+    bounce_ma20     = prev['close'] <= prev['MA20'] and latest['close'] > latest['MA20']
+    ma_hit   = ma_golden_cross or ma_bullish or bounce_ma20
+    ma_parts = []
+    if ma_golden_cross: ma_parts.append('MA5金叉MA20')
+    if ma_bullish:      ma_parts.append('多头排列')
+    if bounce_ma20:     ma_parts.append('站上MA20')
+    signals['MA'] = {'hit': ma_hit, 'desc': '、'.join(ma_parts) or '均线无信号'}
+
+    # MACD（你的列名是 DIF / DEA）
+    macd_golden     = prev['DIF'] <= prev['DEA'] and latest['DIF'] > latest['DEA']
+    macd_above_zero = macd_golden and latest['DIF'] > 0
+    bottom_div      = (latest['close'] < df['close'].iloc[-10:-1].min() and
+                       latest['DIF'] > df['DIF'].iloc[-10:-1].min())
+    macd_hit   = macd_golden or bottom_div
+    macd_parts = []
+    if macd_above_zero:  macd_parts.append('零轴上金叉⭐')
+    elif macd_golden:    macd_parts.append('MACD金叉')
+    if bottom_div:       macd_parts.append('底背离')
+    signals['MACD'] = {'hit': macd_hit, 'desc': '、'.join(macd_parts) or '动能无信号'}
+
+    # RSI
+    rsi = latest['RSI']
+    rsi_oversold = rsi < 30
+    rsi_rebound  = prev['RSI'] < 30 and rsi >= 30
+    rsi_hit = rsi_oversold or rsi_rebound
+    if rsi < 20:          rsi_desc = f'严重超卖 RSI={rsi:.0f}'
+    elif rsi_rebound:     rsi_desc = f'从超卖回升 RSI={rsi:.0f} ⭐'
+    elif rsi_oversold:    rsi_desc = f'超卖区间 RSI={rsi:.0f}'
+    else:                 rsi_desc = f'RSI={rsi:.0f} 无信号'
+    signals['RSI'] = {'hit': rsi_hit, 'desc': rsi_desc}
+
+    # KDJ
+    k, d, j = latest['K'], latest['D'], latest['J']
+    kdj_low_golden = prev['K'] <= prev['D'] and k > d and k < 30
+    j_oversold     = j < 0
+    kdj_hit   = kdj_low_golden or j_oversold
+    kdj_parts = []
+    if kdj_low_golden: kdj_parts.append(f'低位金叉 K={k:.0f}')
+    if j_oversold:     kdj_parts.append(f'J值超卖={j:.0f}')
+    signals['KDJ'] = {'hit': kdj_hit, 'desc': '、'.join(kdj_parts) or f'K={k:.0f} 无信号'}
+
+    # 布林带（你的列名是 BOLL_UPPER / BOLL_MID / BOLL_LOWER）
+    touch_lower  = latest['close'] <= latest['BOLL_LOWER'] * 1.01
+    break_up_mid = prev['close'] < prev['BOLL_MID'] and latest['close'] >= latest['BOLL_MID']
+    boll_hit   = touch_lower or break_up_mid
+    boll_parts = []
+    if touch_lower:  boll_parts.append('触碰下轨超卖')
+    if break_up_mid: boll_parts.append('突破布林中轨')
+    signals['BOLL'] = {'hit': boll_hit, 'desc': '、'.join(boll_parts) or '布林无信号'}
+
+    return signals
+
+
+def check_sell_signals_card(df):
+    """为飞书卡片生成卖出信号 dict，列名适配本项目"""
+    latest = df.iloc[-1]
+    prev   = df.iloc[-2]
+    signals = {}
+
+    # MA
+    ma_dead_cross = prev['MA5'] >= prev['MA20'] and latest['MA5'] < latest['MA20']
+    ma_bearish    = (latest['MA5'] < latest['MA10'] < latest['MA20'])
+    break_ma20    = prev['close'] >= prev['MA20'] and latest['close'] < latest['MA20']
+    ma_hit   = ma_dead_cross or ma_bearish or break_ma20
+    ma_parts = []
+    if ma_dead_cross: ma_parts.append('MA5死叉MA20')
+    if ma_bearish:    ma_parts.append('空头排列')
+    if break_ma20:    ma_parts.append('跌破MA20支撑')
+    signals['MA'] = {'hit': ma_hit, 'desc': '、'.join(ma_parts) or '均线无异常'}
+
+    # MACD（你的列名是 DIF / DEA）
+    macd_dead  = prev['DIF'] >= prev['DEA'] and latest['DIF'] < latest['DEA']
+    below_zero = macd_dead and latest['DIF'] < 0
+    top_div    = (latest['close'] > df['close'].iloc[-10:-1].max() and
+                  latest['DIF'] < df['DIF'].iloc[-10:-1].max())
+    macd_hit   = macd_dead or top_div
+    macd_parts = []
+    if below_zero:  macd_parts.append('零轴下死叉⚠️')
+    elif macd_dead: macd_parts.append('MACD死叉')
+    if top_div:     macd_parts.append('顶背离')
+    signals['MACD'] = {'hit': macd_hit, 'desc': '、'.join(macd_parts) or '动能无异常'}
+
+    # RSI
+    rsi = latest['RSI']
+    rsi_overbought = rsi > 70
+    rsi_pullback   = prev['RSI'] > 70 and rsi < 70
+    rsi_hit = rsi_overbought or rsi_pullback
+    if rsi > 80:          rsi_desc = f'严重超买 RSI={rsi:.0f}'
+    elif rsi_pullback:    rsi_desc = f'从超买回落 RSI={rsi:.0f} ⚠️'
+    elif rsi_overbought:  rsi_desc = f'超买区间 RSI={rsi:.0f}'
+    else:                 rsi_desc = f'RSI={rsi:.0f} 无异常'
+    signals['RSI'] = {'hit': rsi_hit, 'desc': rsi_desc}
+
+    # KDJ
+    k, d, j = latest['K'], latest['D'], latest['J']
+    kdj_high_dead = prev['K'] >= prev['D'] and k < d and k > 70
+    j_overbought  = j > 100
+    kdj_hit   = kdj_high_dead or j_overbought
+    kdj_parts = []
+    if kdj_high_dead: kdj_parts.append(f'高位死叉 K={k:.0f}')
+    if j_overbought:  kdj_parts.append(f'J值超买={j:.0f}')
+    signals['KDJ'] = {'hit': kdj_hit, 'desc': '、'.join(kdj_parts) or f'K={k:.0f} 无异常'}
+
+    # 布林带（你的列名是 BOLL_UPPER / BOLL_MID / BOLL_LOWER）
+    touch_upper      = latest['close'] >= latest['BOLL_UPPER'] * 0.99
+    break_mid        = prev['close'] >= prev['BOLL_MID'] and latest['close'] < latest['BOLL_MID']
+    bw_now           = latest['BOLL_UPPER'] - latest['BOLL_LOWER']
+    bw_prev          = prev['BOLL_UPPER']   - prev['BOLL_LOWER']
+    boll_expand_down = bw_now > bw_prev * 1.1 and latest['close'] < latest['BOLL_MID']
+    boll_hit   = touch_upper or break_mid or boll_expand_down
+    boll_parts = []
+    if touch_upper:       boll_parts.append('触碰上轨超买')
+    if break_mid:         boll_parts.append('跌破布林中轨⚠️')
+    if boll_expand_down:  boll_parts.append('带宽扩张向下')
+    signals['BOLL'] = {'hit': boll_hit, 'desc': '、'.join(boll_parts) or '布林无异常'}
+
+    return signals
+
+
+def calc_key_levels_card(df):
+    latest = df.iloc[-1]
+    return {
+        'resistance': round(float(latest['BOLL_UPPER']), 2),
+        'support':    round(float(latest['BOLL_LOWER']), 2),
+        'stop_loss':  round(float(latest['MA20']) * 0.97, 2),
+    }
