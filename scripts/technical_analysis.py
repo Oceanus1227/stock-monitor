@@ -5,6 +5,7 @@
 """
 
 import os
+import json
 import time
 import requests
 import pandas as pd
@@ -115,16 +116,8 @@ def _parse_history_response(result: dict, fmt_code: str) -> pd.DataFrame:
         return lst + [None] * (n - len(lst))
 
     def _build_from_entry(entry: dict) -> pd.DataFrame:
-        """
-        针对 iFinD 实际结构：
-          - time 序列在 entry 顶层
-          - open/high/low/close/volume 在 entry["table"] 里
-        将两者合并后构建 DataFrame。
-        同时兼容全部数据都在 entry 顶层、或全部在 table 里的情况。
-        """
         entry_lower = {k.lower(): v for k, v in entry.items()}
 
-        # ── 1. 提取时间序列 ──────────────────────────────────
         TIME_ALIASES = [
             "time", "date", "datetime", "trading_date",
             "tradedate", "trade_date", "tdate", "tradingday",
@@ -134,7 +127,6 @@ def _parse_history_response(result: dict, fmt_code: str) -> pd.DataFrame:
         time_key  = next((a for a in TIME_ALIASES if entry_lower.get(a)), None)
         time_list = entry_lower.get(time_key, []) if time_key else []
 
-        # ── 2. 提取价格列（优先从 table 里取，再从顶层取）────
         raw_table = entry_lower.get("table", {})
         if isinstance(raw_table, dict):
             table_lower = {k.lower(): v for k, v in raw_table.items()}
@@ -142,7 +134,6 @@ def _parse_history_response(result: dict, fmt_code: str) -> pd.DataFrame:
             table_lower = {}
 
         def _get_col(name):
-            """先找 table，再找 entry 顶层"""
             return table_lower.get(name) or entry_lower.get(name) or []
 
         open_list   = _get_col("open")
@@ -162,14 +153,12 @@ def _parse_history_response(result: dict, fmt_code: str) -> pd.DataFrame:
             table_lower.get(vol_key) or entry_lower.get(vol_key) or []
         ) if vol_key else []
 
-        # ── 3. 若顶层没有时间，尝试从 table 里找 ────────────
         if not time_list:
             time_key = next(
                 (a for a in TIME_ALIASES if table_lower.get(a)), None
             )
             time_list = table_lower.get(time_key, []) if time_key else []
 
-        # ── 4. 若仍无时间，尝试用字符串列表兜底 ─────────────
         if not time_list:
             for k, v in entry_lower.items():
                 if isinstance(v, list) and v and isinstance(v[0], str):
@@ -200,10 +189,8 @@ def _parse_history_response(result: dict, fmt_code: str) -> pd.DataFrame:
             "volume": _align(vol_list,   n),
         })
 
-    # ── 定位 tables ─────────────────────────────────────────
     tables_raw = result.get("tables") or result.get("data")
 
-    # ══ 形态 A：tables 是 list ══════════════════════════════
     if isinstance(tables_raw, list):
         stock_entry = None
         for item in tables_raw:
@@ -225,7 +212,6 @@ def _parse_history_response(result: dict, fmt_code: str) -> pd.DataFrame:
                     f"返回列表中找不到 {fmt_code}，实际包含: {codes_found}"
                 )
 
-        # ── 优先尝试行列表格式（table 是 list of dict）───────
         raw_table = stock_entry.get("table")
         if isinstance(raw_table, list) and raw_table and isinstance(raw_table[0], dict):
             df = pd.DataFrame(raw_table)
@@ -237,19 +223,14 @@ def _parse_history_response(result: dict, fmt_code: str) -> pd.DataFrame:
             if "date" in df.columns and len(df) > 1:
                 return df
 
-        # ── 核心路径：time 在顶层，价格在 table dict 里 ──────
         return _build_from_entry(stock_entry)
 
-    # ══ 形态 B：tables 是 dict（旧版格式）══════════════════
     if isinstance(tables_raw, dict):
         inner = tables_raw.get("table", {})
         if fmt_code in inner:
-            # 把 fmt_code 对应的子 dict 当作 entry 处理
             sub = inner[fmt_code]
             if isinstance(sub, dict):
                 return _build_from_entry(sub)
-
-        # 整个 tables_raw 就是列字典
         return _build_from_entry(tables_raw)
 
     raise ValueError(
@@ -258,26 +239,95 @@ def _parse_history_response(result: dict, fmt_code: str) -> pd.DataFrame:
     )
 
 
-# ==================== 数据获取 ====================
+# ==================== 缓存配置（方案一）====================
 
-def get_stock_data(code, period="daily", count=120):
-    period_map = {"daily": "D", "weekly": "W", "monthly": "M"}
-    interval   = period_map.get(period, "D")
+CACHE_DIR = "cache/stock_data"
+os.makedirs(CACHE_DIR, exist_ok=True)
 
+
+def _cache_ttl(period: str) -> timedelta:
+    """缓存有效期：收盘后才算当天数据完整"""
+    now          = datetime.now()
+    market_close = now.replace(hour=15, minute=30, second=0, microsecond=0)
+    if period == "daily":
+        # 收盘后：1 小时内有效；收盘前：沿用昨天缓存
+        return timedelta(hours=1) if now > market_close else timedelta(hours=20)
+    if period == "weekly":
+        return timedelta(days=2)
+    if period == "monthly":
+        return timedelta(days=7)
+    return timedelta(hours=1)
+
+
+def _cache_path(code: str, period: str) -> str:
+    return os.path.join(CACHE_DIR, f"{code}_{period}.parquet")
+
+
+def _meta_path(code: str, period: str) -> str:
+    return os.path.join(CACHE_DIR, f"{code}_{period}.meta.json")
+
+
+def _is_cache_fresh(code: str, period: str) -> bool:
+    mp = _meta_path(code, period)
+    cp = _cache_path(code, period)
+    if not os.path.exists(mp) or not os.path.exists(cp):
+        return False
+    try:
+        with open(mp) as f:
+            meta = json.load(f)
+        saved_at = datetime.fromisoformat(meta["saved_at"])
+        return (datetime.now() - saved_at) < _cache_ttl(period)
+    except Exception:
+        return False
+
+
+def _save_cache(df: pd.DataFrame, code: str, period: str):
+    try:
+        df.to_parquet(_cache_path(code, period))
+        with open(_meta_path(code, period), "w") as f:
+            json.dump({
+                "saved_at": datetime.now().isoformat(),
+                "rows":     len(df),
+            }, f)
+    except Exception as e:
+        print(f"  ⚠️  [{code}] 缓存写入失败（不影响运行）: {e}")
+
+
+def _load_cache(code: str, period: str) -> pd.DataFrame:
+    return pd.read_parquet(_cache_path(code, period))
+
+
+# ==================== 数据获取（方案一 + 三）====================
+
+def _clean_df(df: pd.DataFrame, count: int) -> pd.DataFrame:
+    """解析后统一清洗"""
+    df["date"] = pd.to_datetime(df["date"])
+    df = (
+        df.sort_values("date")
+          .drop_duplicates("date")
+          .reset_index(drop=True)
+          .set_index("date")
+    )
+    cols = [c for c in ["open", "high", "low", "close", "volume"] if c in df.columns]
+    df   = df[cols].apply(pd.to_numeric, errors="coerce")
+    df   = df.dropna(subset=["close"])
+    return df.tail(count)
+
+
+def _build_payload(fmt_codes: str, period: str, count: int) -> dict:
+    """构造 iFinD 请求 payload"""
+    period_map  = {"daily": "D", "weekly": "W", "monthly": "M"}
+    interval    = period_map.get(period, "D")
     fetch_count = count + 30
     end_date    = datetime.now()
     day_buffer  = {"D": 2.8, "W": 12.0, "M": 45.0}.get(interval, 2.8)
     start_date  = end_date - timedelta(days=int(fetch_count * day_buffer) + 60)
 
-    start_str = start_date.strftime("%Y-%m-%d")
-    end_str   = end_date.strftime("%Y-%m-%d")
-    fmt_code  = _fmt_code(code)
-
-    payload = {
-        "codes":      fmt_code,
+    return {
+        "codes":      fmt_codes,
         "indicators": "open,high,low,close,volume",
-        "startdate":  start_str,
-        "enddate":    end_str,
+        "startdate":  start_date.strftime("%Y-%m-%d"),
+        "enddate":    end_date.strftime("%Y-%m-%d"),
         "functionpara": {
             "Interval": interval,
             "CPS":      "2",
@@ -286,52 +336,104 @@ def get_stock_data(code, period="daily", count=120):
         },
     }
 
+
+def get_batch_stock_data(
+    codes:     list,
+    period:    str  = "daily",
+    count:     int  = 120,
+    use_cache: bool = True,
+) -> dict:
+    """
+    批量获取多只股票数据，自动利用本地缓存（方案一 + 三）。
+
+    返回: {code_str: pd.DataFrame}，失败的股票不在字典里。
+
+    流程：
+      1. 检查每只股票本地缓存是否新鲜
+      2. 新鲜的直接读缓存，其余合并成 1 次 API 请求
+      3. 解析结果后写入缓存
+    """
+    result     = {}
+    need_fetch = []
+
+    # ── 步骤 1：缓存检查 ────────────────────────────────────
+    for code in codes:
+        if use_cache and _is_cache_fresh(code, period):
+            try:
+                df = _load_cache(code, period)
+                result[code] = df.tail(count)
+                print(f"  📦 [{code}] 命中本地缓存，跳过 API")
+            except Exception as e:
+                print(f"  ⚠️  [{code}] 缓存读取失败，重新拉取: {e}")
+                need_fetch.append(code)
+        else:
+            need_fetch.append(code)
+
+    if not need_fetch:
+        print(f"  ✅ 全部 {len(codes)} 只股票命中缓存，本次 API 调用次数: 0")
+        return result
+
+    # ── 步骤 2：一次批量 API 请求（方案三）─────────────────
+    fmt_codes_str = ",".join(_fmt_code(c) for c in need_fetch)
+    print(f"  🌐 批量请求 {len(need_fetch)} 只股票（1 次 API 调用）: {fmt_codes_str}")
+
+    payload      = _build_payload(fmt_codes_str, period, count)
     MAX_RETRIES  = 3
     RETRY_DELAYS = [15, 30, 60]
+    raw_result   = None
     last_error   = None
-    result       = None
 
     for attempt in range(MAX_RETRIES):
         try:
             access_token = _get_access_token(force_refresh=(attempt > 0))
-            result = _ifind_post("cmd_history_quotation", payload, access_token)
+            raw_result   = _ifind_post("cmd_history_quotation", payload, access_token)
             break
         except Exception as e:
             last_error = e
             if attempt < MAX_RETRIES - 1:
                 wait = RETRY_DELAYS[attempt]
-                print(f"  ⚠️  [{code}] 第 {attempt+1} 次请求失败，{wait}s 后重试… ({e})")
+                print(f"  ⚠️  批量请求第 {attempt+1} 次失败，{wait}s 后重试… ({e})")
                 time.sleep(wait)
-            else:
-                raise RuntimeError(
-                    f"❌ 获取 [{code}] 数据失败，已重试 {MAX_RETRIES} 次。"
-                    f"最后错误: {last_error}"
-                ) from last_error
 
-    df = _parse_history_response(result, fmt_code)
+    if raw_result is None:
+        print(f"  ❌ 批量 API 请求失败，已重试 {MAX_RETRIES} 次。最后错误: {last_error}")
+        return result   # 返回已有缓存部分，不抛异常
 
-    df["date"] = pd.to_datetime(df["date"])
-    df = (
-        df.sort_values("date")
-          .drop_duplicates("date")
-          .reset_index(drop=True)
-          .set_index("date")
-    )
+    # ── 步骤 3：逐只解析 + 写缓存 ──────────────────────────
+    for code in need_fetch:
+        fmt_code = _fmt_code(code)
+        try:
+            df = _parse_history_response(raw_result, fmt_code)
+            df = _clean_df(df, count)
 
-    cols = [c for c in ["open", "high", "low", "close", "volume"] if c in df.columns]
-    df   = df[cols].apply(pd.to_numeric, errors="coerce")
-    df   = df.dropna(subset=["close"])
+            if df.empty:
+                print(f"  ⚠️  [{code}] 清洗后数据为空，跳过")
+                continue
+            if len(df) < 20:
+                print(f"  ⚠️  [{code}] 数据不足 20 条（{len(df)} 条），跳过")
+                continue
+            if len(df) < 60:
+                print(f"  ⚠️  [{code}] 数据较少（{len(df)} 条），长周期指标精度下降")
 
-    if df.empty:
-        raise ValueError(f"❌ [{code}] 清洗后数据为空，请检查代码或日期范围")
-    if len(df) < 20:
-        raise ValueError(
-            f"❌ [{code}] 数据严重不足（仅 {len(df)} 条），无法计算技术指标"
-        )
-    if len(df) < 60:
-        print(f"  ⚠️  [{code}] 数据较少（{len(df)} 条），MA60 等长周期指标精度下降")
+            _save_cache(df, code, period)
+            result[code] = df
+            print(f"  ✅ [{code}] 解析成功，{len(df)} 条，缓存已更新")
 
-    return df.tail(count)
+        except Exception as e:
+            print(f"  ❌ [{code}] 解析失败: {e}")
+
+    return result
+
+
+def get_stock_data(code: str, period: str = "daily", count: int = 120) -> pd.DataFrame:
+    """
+    保持向后兼容的单只股票接口。
+    内部调用 get_batch_stock_data()，享受缓存 + 批量逻辑。
+    """
+    batch = get_batch_stock_data([code], period=period, count=count)
+    if code not in batch:
+        raise ValueError(f"❌ [{code}] 数据获取失败")
+    return batch[code]
 
 
 # ==================== 技术指标计算 ====================
