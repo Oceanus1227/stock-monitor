@@ -34,7 +34,7 @@
       "boll_lower": 112.92,
       "boll_width": 0.2418,
       "volume_confirmed": true,
-      "update_time": "2026-03-03T08:12:22.743363",
+      "update_time": "2026-03-03T11:20:44.039006",
       "price_history": [
         124.25,
         121.87,
@@ -124,7 +124,7 @@
       "boll_lower": 139.52,
       "boll_width": 0.3599,
       "volume_confirmed": true,
-      "update_time": "2026-03-03T08:12:25.361954",
+      "update_time": "2026-03-03T11:20:45.383749",
       "price_history": [
         177.36,
         170.12,
@@ -214,7 +214,7 @@
       "boll_lower": 24.67,
       "boll_width": 0.2039,
       "volume_confirmed": false,
-      "update_time": "2026-03-03T08:12:26.808405",
+      "update_time": "2026-03-03T11:20:46.122512",
       "price_history": [
         31.53,
         28.66,
@@ -272,7 +272,7 @@
     }
   ],
   "watchlist_count": 11,
-  "update_time": "2026-03-03T08:12:27.539130",
+  "update_time": "2026-03-03T11:20:47.170601",
   "is_last_trading": false,
   "note": ""
 }
